@@ -26,16 +26,62 @@ Only the \emph{generation host} needs the fork. Everything under
 exceptions, \lang{rest} and \lang{json}.
 \end{note}
 
-\section{Build the tool, once}
+\section{The whole build, in two commands}
+\label{sec:twocommands}
+
+Everything in this chapter reduces to two lines. Scaffold a binding project
+next to your library with \code{tools/rosetta\_init.py} --- it writes a
+\code{manifest.json} skeleton and a bootstrap \code{CMakeLists.txt} --- and
+then:
+
+\begin{lstlisting}[style=sh]
+# 1. one-time bootstrap: fetch rosetta into extern/ and build rosetta_gen
+cmake -B build && cmake --build build -j10
+
+# 2. generate the generator, run it, and compile every target
+./extern/rosetta/bin/rosetta_gen --build manifest.json -j10
+\end{lstlisting}
+
+That is the whole pipeline. The rest of this chapter takes the two apart.
+
+\subsection*{What the first command does}
+
+The bootstrap \code{CMakeLists.txt} fetches rosetta into \code{extern/} (an
+existing checkout is left alone) and builds the \code{rosetta\_gen} tool. The
+binary always lands in \code{<rosetta>/bin/rosetta\_gen} --- not in the build
+tree --- so from your project it is \code{./extern/rosetta/bin/rosetta\_gen}.
+
+This step needs \textbf{no reflection}: \code{rosetta\_gen} is a JSON reader
+and a text templater, and builds with an off-the-shelf C++17 compiler. It is
+also the only one you run once --- nothing below re-runs it.
+
+\subsection*{What the second command does}
+
+\code{--build} chains the three stages of Chapter~\ref{ch:pipeline}: it emits
+the generator project into \code{gen/}, builds it (\textbf{this} is the step
+that needs clang-p2996, and where reflection runs), runs it to write one
+project per target into \code{bindings/}, and then compiles each of those.
+
+\begin{note}
+\code{-j10} is passed to \emph{every} CMake build the command drives --- the
+generator's and each backend's. A bare \code{-j} means one job per core.
+Backends are still built one after another, so this parallelises within a
+backend, not across them; \code{--only python,node} is how you cut the matrix
+while iterating (Section~\ref{sec:onlyskip}).
+\end{note}
+
+\subsection*{Inside the rosetta repository instead}
+
+If you are working in a checkout of rosetta itself rather than a scaffolded
+project, there is no bootstrap to run --- build the tool directly:
 
 \begin{lstlisting}[style=sh]
 cmake -G Ninja -S tools/rosetta_gen -B tools/rosetta_gen/build
-cmake --build tools/rosetta_gen/build
+cmake --build tools/rosetta_gen/build -j10
 \end{lstlisting}
 
-The binary always lands in \code{<repo>/bin/rosetta\_gen} --- not in the build
-tree. This step needs no reflection: \code{rosetta\_gen} is a JSON reader and a
-text templater, and builds with an off-the-shelf C++17 compiler.
+The binary lands in the same place, \code{<repo>/bin/rosetta\_gen}. This is the
+form the examples in \code{examples/} use.
 
 \section{The library --- leave it alone}
 
@@ -67,7 +113,7 @@ manifest's own directory. Here, \code{my\_lib/rosetta/manifest.json}:
 \begin{lstlisting}[style=json]
 {
   "user_include": "..",
-  "rosetta_include": "/path/to/rosetta/include",
+  "rosetta_include": "./extern/rosetta/include",
   "generator_name": "person_gen",
   "module_name": "person",
 
@@ -106,14 +152,17 @@ fully-commented starter manifest, and \code{rosetta\_gen --init manifest.json
 See Section~\ref{sec:init}.
 \end{note}
 
-\section{Generate and build --- the one-command version}
+\section{Generate and compile}
+
+The second command from Section~\ref{sec:twocommands}:
 
 \begin{lstlisting}[style=sh]
-/path/to/rosetta/bin/rosetta_gen --build manifest.json
+./extern/rosetta/bin/rosetta_gen --build manifest.json -j10
 \end{lstlisting}
 
-That emits the generator project, builds it (this is where reflection runs),
-runs it, and then compiles every backend. The run ends with a summary:
+It emits the generator project, builds it (this is where reflection runs), runs
+it, and then compiles every backend the manifest declares. The run ends with a
+per-backend summary:
 
 \begin{lstlisting}[style=plain]
 == summary
@@ -130,22 +179,10 @@ the run:
    wasm        SKIPPED (emcc not found -- activate emsdk)
 \end{lstlisting}
 
-\section{The same thing, one step at a time}
+\section{What it produced}
 
-Worth doing once, because it makes the pipeline concrete.
-
-\begin{lstlisting}[style=sh]
-# 1. manifest -> generator project (no reflection yet)
-rosetta_gen manifest.json gen
-
-# 2. build the generator -- REFLECTION HAPPENS HERE
-cmake -S gen -B gen/build && cmake --build gen/build
-
-# 3. run it -- one self-contained project per target
-./generator bindings
-\end{lstlisting}
-
-After step~1, look inside \code{gen/}. There are three files:
+Two directories. \code{gen/} is the generator project --- three files, written
+from the manifest and then compiled and run for you:
 
 \begin{center}
 \small
@@ -160,7 +197,7 @@ After step~1, look inside \code{gen/}. There are three files:
 \end{tabular}
 \end{center}
 
-After step~3:
+And \code{bindings/} is the output --- one self-contained project per target:
 
 \begin{lstlisting}[style=plain]
 bindings/
@@ -176,14 +213,17 @@ Open \code{auto\_pybind.cpp}. It is ordinary pybind11 --- explicit
 shippable: it compiles on any machine with pybind11 and a normal C++
 compiler.
 
-\section{Build and use it}
+\begin{note}
+\code{--build} drives these stages for you, but they can be run one at a time
+--- emit \code{gen/}, build it, run the generator --- which is what you want
+when inspecting \code{bindings.h}, hacking on the emitted driver, or wiring the
+stages into a build system of your own. That is \emph{plain mode}, covered in
+Chapter~\ref{ch:rosettagen}.
+\end{note}
+
+\section{Use it}
 
 \subsection*{Python}
-
-\begin{lstlisting}[style=sh]
-cd bindings/python
-cmake -G Ninja -B build && cmake --build build
-\end{lstlisting}
 
 \begin{lstlisting}[style=py]
 import person_py
@@ -195,11 +235,6 @@ print(p.age)
 \end{lstlisting}
 
 \subsection*{Node}
-
-\begin{lstlisting}[style=sh]
-cd bindings/node
-npm install && npx cmake-js compile
-\end{lstlisting}
 
 \begin{lstlisting}[style=js]
 const m = require('./build/Release/person_js.node');

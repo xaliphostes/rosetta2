@@ -56,10 +56,10 @@ concept}: three required member templates plus one optional, each receiving a
 \begin{lstlisting}[style=cpp]
 // include/rosetta/visitors/lua.h
 #pragma once
-#include <experimental/meta>
-#include <rosetta/walk.h>
-#include <sol/sol.hpp>
-#include <string>
+#include <experimental/meta> // C++ P2995
+#include <rosetta/walk.h>    // Rosetta
+#include <sol/sol.hpp>       // Lua
+#include <string>            // C++ std
 
 namespace rosetta {
 
