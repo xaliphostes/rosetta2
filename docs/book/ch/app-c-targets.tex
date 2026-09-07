@@ -70,6 +70,59 @@ ignores the field rather than failing.
 \end{longtable}
 \end{center}
 
+\section{Documentation output}
+
+Where each backend puts the documentation, parameter names and default
+arguments harvested from your headers (chapter~\ref{ch:documentation}). A dash
+means the target has nowhere to put it, not that the data is missing from the
+IR.
+
+\begin{center}
+\small
+\begin{longtable}{@{}lL{5.6cm}L{5.0cm}@{}}
+\toprule
+\textbf{\code{lang}} & \textbf{Documentation lands as} &
+  \textbf{Names \& defaults} \\
+\midrule
+\endhead
+\lang{python} \lang{nanobind} & docstring, with \code{Args:} /
+  \code{Returns:} sections; the class comment is the type's docstring &
+  \code{py::arg} / \code{nb::arg} keyword arguments; real Python defaults
+  (see the import-time rule) \\
+\addlinespace
+\lang{typescript} & TSDoc block: prose, \code{@param}, \code{@returns} &
+  names in the signature; a defaulted parameter is \code{optional?} \\
+\addlinespace
+\lang{markdown} \lang{html} & prose, a list of documented arguments, a
+  \emph{Returns} line & \code{name: type = default} in the signature \\
+\addlinespace
+\lang{openapi} & operation \code{description}; per-argument
+  \code{description} & argument \code{title}, and \code{default} where the
+  value is expressible in JSON \\
+\addlinespace
+\lang{csharp} & \code{/// <summary>} XML doc & names in the wrapper
+  signature (keyword-guarded) \\
+\addlinespace
+\lang{java} & Javadoc block & names in the wrapper signature
+  (keyword-guarded) \\
+\addlinespace
+\lang{qt} \lang{qml} \lang{imgui} & a field's tooltip & the name labels the
+  argument box \\
+\addlinespace
+\lang{dynamic} & text in the emitted \code{MetaClass} tables & names in the
+  parameter tables \\
+\addlinespace
+\lang{node} \lang{wasm} \lang{lua} \lang{julia} & --- (no docstring slot;
+  pair with \lang{typescript}) & --- (the wrappers spell positional locals) \\
+\addlinespace
+\lang{rest} & --- (the spec is \lang{openapi}'s job) & names in the
+  browser client's field placeholders \\
+\addlinespace
+\lang{json} \lang{paraview} & --- & --- \\
+\bottomrule
+\end{longtable}
+\end{center}
+
 \section{Packaging}
 
 Only two backends emit a \code{make\_wheel.py}, so only those two accept the

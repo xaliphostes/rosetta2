@@ -228,7 +228,9 @@ TEST(SharedPtr, NanobindEmitsNoConstructorForAnAbstractClass) {
     const std::string s = render("nanobind", c);
     EXPECT_NE(s.find("nb::class_<spns::Executor>(m, \"Executor\")"), std::string::npos);
     EXPECT_EQ(s.find("nb::init"), std::string::npos);
-    EXPECT_NE(s.find(".def(\"run\", &spns::Executor::run)"), std::string::npos);
+    // `run(int n)` declares its parameter, so the binding offers it as a
+    // keyword argument — nanobind and pybind spell that the same way.
+    EXPECT_NE(s.find(".def(\"run\", &spns::Executor::run, nb::arg(\"n\"))"), std::string::npos);
 }
 
 TEST(SharedPtr, NanobindStillConstructsAConcreteClass) {

@@ -1484,6 +1484,53 @@ Manifest load(const fs::path &manifest_path) {
         }
     }
 
+    // "doc_comments": read the documentation the bound headers already carry.
+    // Off is spelled explicitly; anything else (including absent) leaves it on,
+    // because a library's own comments are what a generated binding should say
+    // and re-reading files rosetta_gen has already located costs nothing.
+    if (j.contains("doc_comments")) {
+        if (!j.at("doc_comments").is_boolean()) {
+            throw std::runtime_error("\"doc_comments\" must be true or false");
+        }
+        m.doc_comments = j.at("doc_comments").get<bool>();
+    }
+    if (m.doc_comments) {
+        // Every header a bound entity is declared in — classes, their extension
+        // methods, and free functions. Each is an INCLUDE path ("geom/point.h"),
+        // so it is resolved against the include roots, first match wins, exactly
+        // as the compiler will resolve it later.
+        std::vector<std::string> headers;
+        auto want = [&headers](const std::string &h) {
+            if (!h.empty() && std::find(headers.begin(), headers.end(), h) == headers.end()) {
+                headers.push_back(h);
+            }
+        };
+        for (const auto &c : m.classes) {
+            want(c.header);
+            for (const auto &x : c.extensions) {
+                want(x.header);
+            }
+        }
+        for (const auto &f : m.functions) {
+            want(f.header);
+        }
+        for (const std::string &h : headers) {
+            for (const auto &inc : m.user_include) {
+                std::error_code ec;
+                const fs::path  p = inc / h;
+                if (!fs::is_regular_file(p, ec)) {
+                    continue;
+                }
+                merge_doc_maps(m.harvested_docs, harvest_doc_comments_file(p));
+                break;
+            }
+            // A header that resolves nowhere is NOT an error here: it may be a
+            // "generated_headers" entry that does not exist yet, or live on an
+            // include path only the compiler knows. It simply contributes no
+            // documentation.
+        }
+    }
+
     // Extension methods bind as members of their class, so the same rule
     // applies per class rather than module-wide.
     for (const auto &c : m.classes) {

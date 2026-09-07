@@ -39,6 +39,7 @@ Every field is listed in [Top-level fields](#top-level-fields); the sections bel
 - [Foreign-library interop (`interop`)](#foreign-library-interop-interop)
   - [Reaching the caster-less backends: register the type as a sequence too](#reaching-the-caster-less-backends-register-the-type-as-a-sequence-too)
 - [Standard types that need no declaration: `std::filesystem::path`, `std::shared_ptr<T>`](#standard-types-that-need-no-declaration-stdfilesystempath-stdshared_ptrt)
+- [Doc comments (`doc_comments`)](#doc-comments-doc_comments)
 - [Out-parameters (`out_params`)](#out-parameters-out_params)
 - [Module init (`module_init`)](#module-init-module_init)
 - [Generated headers (`generated_headers`)](#generated-headers-generated_headers)
@@ -148,6 +149,7 @@ cmake -B build && cmake --build build
 | `optimization` | — | — | Explicit optimization flag (`-O0`…`-O3`, `-Os`, `-Oz`, `-Og`, `-Ofast`) applied to every compiled backend, overriding the build type's own `-O` level. See [Build type & optimization](#build-type--optimization-build_type-optimization). |
 | `version` | — | `0.1.0` | Distribution version stamped into the packaging artifacts — the `pyproject.toml` the `python` / `nanobind` backends emit for wheel builds. See [Python wheels](#python-wheels-version). |
 | `plugins` | — | `[]` | Extra `.cpp` sources to compile into the generator driver (e.g. a custom backend). Paths relative to the manifest. |
+| `doc_comments` | — | `true` | Read the Doxygen documentation and default arguments already present in the bound headers, and carry them into every backend. Set `false` to generate from annotations alone. See [below](#doc-comments-doc_comments). |
 | `out_params` | — | `{}` | Which parameters a method returns **through a reference**, keyed `"Class::method"`. Never inferred. See [below](#out-parameters-out_params). |
 | `module_init` | — | — | Statements the generated module runs when it **loads** (plus the headers declaring them) — a library's lifecycle, which is not a binding. See [below](#module-init-module_init). |
 | `generated_headers` | — | `[]` | Headers the bound library's own build system would have produced (e.g. a configured `version.h`), written into the generated tree and put first on the include path. See [below](#generated-headers-generated_headers). |
@@ -731,6 +733,133 @@ Two limits worth knowing:
 
 Both work with a non-copyable `T` — which is the point, since a class handed out
 by a factory usually is one.
+
+---
+
+## Doc comments (`doc_comments`)
+
+Your library is probably already documented. `rosetta_gen` reads that
+documentation out of the headers it is already opening and hands it to every
+backend, so a generated binding is not born blank.
+
+```json
+{ "doc_comments": false }     // default: true
+```
+
+Given this header — which mentions rosetta nowhere:
+
+```cpp
+/// A circle in the plane.
+struct Circle {
+    /// Distance from the centre to the rim.
+    double radius = 1.0;
+
+    /**
+     * @brief Approximate the outline as a polygon.
+     * @param segments  how many straight edges to use
+     * @param close     whether to repeat the first point at the end
+     * @return the vertex coordinates, x and y interleaved
+     */
+    std::vector<double> outline(int segments = 32, bool close = true) const;
+};
+```
+
+the Python binding becomes
+
+```python
+>>> help(shapes.Circle.outline)
+outline(self, segments: int = 32, close: bool = True) -> list[float]
+
+    Approximate the outline as a polygon.
+
+    Args:
+        segments: how many straight edges to use
+        close: whether to repeat the first point at the end
+
+    Returns:
+        the vertex coordinates, x and y interleaved
+
+>>> c.outline(segments=8, close=False)      # keyword arguments, C++ defaults
+```
+
+and the TypeScript declaration becomes
+
+```ts
+/**
+ * Approximate the outline as a polygon.
+ * @param segments how many straight edges to use
+ * @param close whether to repeat the first point at the end
+ * @returns the vertex coordinates, x and y interleaved
+ */
+outline(segments?: number, close?: boolean): number[];
+```
+
+### What it reads
+
+| From the header | Where it lands |
+|---|---|
+| `///`, `//!`, `/** */`, `/*! */` blocks, and `///<` trailing comments | the member's doc / docstring / TSDoc / Javadoc / XML doc / OpenAPI `description` |
+| `@brief`, `@details`, untagged prose | the same |
+| `@param <name> …` (with `[in]` / `[out]` / `[in,out]` markers) | `GenParam::doc` — a `py::arg` name plus an `Args:` section, a TSDoc `@param`, an OpenAPI parameter description |
+| `@return` / `@returns` | `GenMethod::returns` — a `Returns:` section, a TSDoc `@returns` |
+| `@note`, `@warning`, `@deprecated`, `@throws`, `@pre`, `@post`, `@see`, `@since` | labelled paragraphs appended to the doc |
+| a class's own comment | `GenClass::brief` — the Python type's docstring, the TypeScript class comment |
+| **default arguments** (`int segments = 32`) | `GenParam::default_text` — a real `py::arg("segments") = 32`, an optional `segments?` in TypeScript |
+
+`@tparam`, `@file`, `@ingroup` and the other bookkeeping commands are dropped.
+
+### Why default arguments come from the text
+
+Reflection reports *that* a parameter has a default (`std::meta::
+has_default_argument`, surfaced as `GenParam::has_default`) but not what the
+expression was — P2996 has no way to ask. So the fact and the spelling arrive by
+different routes and are **cross-checked**: a spelling is used only where
+reflection independently confirms a default exists. A parameter known to be
+optional whose default could not be recovered is still marked optional; it just
+has no value to show.
+
+The harvester is deliberately conservative about which defaults it will repeat
+into generated C++, because a wrong one does not produce a bad docstring — it
+produces a binding that does not compile. It accepts literals (`32`, `1e-6`,
+`true`, `"auto"`, `{}`) and qualified-ids (`Mode::Fast`); it refuses anything
+with a call, an operator or a comma in it (`Point(0, 0)`, `a + b`,
+`sizeof(int)`), and it refuses an **unqualified** enumerator (`Fast`), which
+would not resolve where the binding spells it.
+
+The Python family adds one more rule of its own: pybind converts an `arg`
+default into a Python object at **module import**, so a default whose type is
+not registered fails the import outright. Defaults are therefore emitted for
+numbers, booleans, strings, and enums bound in the same module — never for a
+class type or an unbound enum.
+
+### Precedence
+
+Harvested text only ever **fills a blank**. In order:
+
+1. an inline `[[= rosetta::doc{"…"}]]` annotation (the harvester skips a member that carries one);
+2. a JSON side-car entry (see [out-of-line annotations](OUT_OF_LINE_ANNOTATIONS.md)), or a manifest `doc` on a free function;
+3. the header's own comment.
+
+So adopting `doc_comments` cannot change a binding you have already annotated,
+and the two mechanisms compose: annotate the handful of members that need
+`range`, `readonly` or a rewritten description, and let the headers document
+the rest.
+
+A complete, runnable walkthrough — including the cases where the harvester
+deliberately does less than you might expect — is in
+[`examples/doxygen`](../examples/doxygen).
+
+### What it will not do
+
+It is a scanner, not a compiler: it does not expand macros or follow
+`#include`. Everything it records is matched against the reflected signature
+before it is used — by arity and by parameter names — and dropped when the two
+disagree, so a mis-read declaration loses its documentation rather than
+attaching it to the wrong member. When two overloads of a name are
+indistinguishable, **neither** is documented. Private members are never read;
+neither are constructors, destructors or operators, none of which have a doc
+slot in the IR. Members inherited from a base declared in a header no class
+entry names are not covered — list that base as a class to reach it.
 
 ---
 

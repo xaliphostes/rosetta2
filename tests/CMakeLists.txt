@@ -264,7 +264,8 @@ gtest_discover_tests(interop_sequence)
 # the suite compiles that file directly and needs neither reflection nor
 # annotations — only nlohmann/json, which the loader parses with.
 add_executable(manifest_glob manifest_glob.cpp
-    ${CMAKE_SOURCE_DIR}/../tools/rosetta_gen/manifest.cpp)
+    ${CMAKE_SOURCE_DIR}/../tools/rosetta_gen/manifest.cpp
+    ${CMAKE_SOURCE_DIR}/../tools/rosetta_gen/doccomments.cpp)
 target_include_directories(manifest_glob PRIVATE ${CMAKE_SOURCE_DIR}/../tools/rosetta_gen)
 target_link_libraries(manifest_glob PRIVATE GTest::gtest_main nlohmann_json::nlohmann_json)
 gtest_discover_tests(manifest_glob)
@@ -273,7 +274,8 @@ gtest_discover_tests(manifest_glob)
 # as $P / ${P}). Same arrangement as manifest_glob above — the loader itself,
 # compiled directly, with no reflection involved.
 add_executable(manifest_vars manifest_vars.cpp
-    ${CMAKE_SOURCE_DIR}/../tools/rosetta_gen/manifest.cpp)
+    ${CMAKE_SOURCE_DIR}/../tools/rosetta_gen/manifest.cpp
+    ${CMAKE_SOURCE_DIR}/../tools/rosetta_gen/doccomments.cpp)
 target_include_directories(manifest_vars PRIVATE ${CMAKE_SOURCE_DIR}/../tools/rosetta_gen)
 target_link_libraries(manifest_vars PRIVATE GTest::gtest_main nlohmann_json::nlohmann_json)
 gtest_discover_tests(manifest_vars)
@@ -282,10 +284,38 @@ gtest_discover_tests(manifest_vars)
 # including the guard against the old top-level spelling. Same arrangement as
 # the two suites above — the loader itself, with no reflection involved.
 add_executable(manifest_wheel manifest_wheel.cpp
-    ${CMAKE_SOURCE_DIR}/../tools/rosetta_gen/manifest.cpp)
+    ${CMAKE_SOURCE_DIR}/../tools/rosetta_gen/manifest.cpp
+    ${CMAKE_SOURCE_DIR}/../tools/rosetta_gen/doccomments.cpp)
 target_include_directories(manifest_wheel PRIVATE ${CMAKE_SOURCE_DIR}/../tools/rosetta_gen)
 target_link_libraries(manifest_wheel PRIVATE GTest::gtest_main nlohmann_json::nlohmann_json)
 gtest_discover_tests(manifest_wheel)
+
+# The DOC-COMMENT HARVESTER (rosetta_gen's doccomments.cpp): Doxygen blocks and
+# default arguments read out of header TEXT. Same arrangement as the manifest
+# suites — the tool's own source, compiled directly, no reflection involved.
+add_executable(doc_comments doc_comments.cpp
+    ${CMAKE_SOURCE_DIR}/../tools/rosetta_gen/doccomments.cpp)
+target_include_directories(doc_comments PRIVATE ${CMAKE_SOURCE_DIR}/../tools/rosetta_gen)
+target_link_libraries(doc_comments PRIVATE GTest::gtest_main)
+gtest_discover_tests(doc_comments)
+
+# Matching harvested doc comments onto reflected signatures
+# (gen_detail::apply_doc_comments): overload disambiguation, the fill-never-
+# overwrite rule, and the cross-check that keeps a mis-read default argument out
+# of the generated C++. Hand-built IR, so no annotations are needed.
+add_executable(doc_apply doc_apply.cpp)
+target_include_directories(doc_apply PRIVATE ${CMAKE_SOURCE_DIR}/../include)
+target_link_libraries(doc_apply PRIVATE GTest::gtest_main)
+gtest_discover_tests(doc_apply)
+
+# Parameter NAMES and DEFAULT ARGUMENTS read from the declaration by
+# gen_detail::params_of. Reflection-only (no annotations needed): the suite
+# reads several differently-shaped signatures in one binary, which is what
+# catches names leaking between functions.
+add_executable(param_names param_names.cpp)
+target_include_directories(param_names PRIVATE ${CMAKE_SOURCE_DIR}/../include)
+target_link_libraries(param_names PRIVATE GTest::gtest_main)
+gtest_discover_tests(param_names)
 
 add_executable(nested_enum nested_enum.cpp)
 target_include_directories(nested_enum PRIVATE ${CMAKE_SOURCE_DIR}/../include)

@@ -129,11 +129,70 @@ namespace rosetta {
             }
             return oa_ok(oa_schema(ret, c));
         }
+        // A harvested default argument as JSON, or "" when it is not expressible
+        // there. `Quality::Fine` is a perfectly good C++ default and no JSON
+        // value at all, so it does not become a lying `"default"` — it is
+        // mentioned in the description instead (see oa_param_schema).
+        inline std::string oa_default_json(const std::string &cpp) {
+            if (cpp.empty()) {
+                return {};
+            }
+            if (cpp == "true" || cpp == "false") {
+                return cpp;
+            }
+            if (cpp.size() >= 2 && cpp.front() == '"' && cpp.back() == '"') {
+                return "\"" + oa_esc(cpp.substr(1, cpp.size() - 2)) + "\"";
+            }
+            // A plain decimal number; a suffixed or hex literal ("0u", "0x10L")
+            // is C++ spelling, not JSON, so it is left out.
+            std::size_t i = (cpp[0] == '-' || cpp[0] == '+') ? 1 : 0;
+            if (i >= cpp.size()) {
+                return {};
+            }
+            bool dot = false;
+            for (std::size_t j = i; j < cpp.size(); ++j) {
+                if (cpp[j] == '.' && !dot) {
+                    dot = true;
+                    continue;
+                }
+                if (cpp[j] < '0' || cpp[j] > '9') {
+                    return {};
+                }
+            }
+            return cpp;
+        }
+
+        // One argument's schema, carrying what the header said about it: the
+        // parameter's NAME as the title, its @param text as the description, and
+        // its default. The wire shape is unchanged — the request body stays a
+        // positional array, which is what the REST backend serves — so this is
+        // purely what a reader (or Swagger UI) sees.
+        inline std::string oa_param_schema(const GenParam &p, const GenContext &c) {
+            std::vector<std::string> extra;
+            if (!p.name.empty()) {
+                extra.push_back("\"title\":\"" + oa_esc(p.name) + "\"");
+            }
+            std::string       desc = p.doc;
+            const std::string def  = oa_default_json(p.default_text);
+            if (def.empty() && !p.default_text.empty()) {
+                desc += (desc.empty() ? "" : " ") + std::string("(default: ") + p.default_text + ")";
+            } else if (p.has_default && p.default_text.empty()) {
+                desc += (desc.empty() ? "" : " ") + std::string("(optional in C++)");
+            }
+            if (!desc.empty()) {
+                extra.push_back("\"description\":\"" + oa_esc(desc) + "\"");
+            }
+            if (!def.empty()) {
+                extra.push_back("\"default\":" + def);
+            }
+            return oa_inject(oa_schema(p.type, c), extra);
+        }
+
         // Positional args as a JSON array (3.1 tuple via prefixItems).
         inline std::string oa_args_request(const std::vector<GenParam> &ps, const GenContext &c) {
             std::string items = "[";
             for (std::size_t i = 0; i < ps.size(); ++i) {
-                items += (i ? "," : "") + oa_schema(ps[i].type, c);
+                items += (i ? "," : "") + oa_param_schema(ps[i], c);
             }
             items += "]";
             const std::string n = std::to_string(ps.size());
@@ -207,9 +266,21 @@ namespace rosetta {
                     if (!m.is_static) {
                         resps += "," + std::string(OA_404);
                     }
+                    // The method's own documentation becomes the operation
+                    // description; @return text is what the 200 response means,
+                    // but oa_return_responses owns that string, so it joins the
+                    // description rather than being dropped.
+                    std::string odesc = m.doc;
+                    if (!m.returns.empty()) {
+                        odesc += (odesc.empty() ? "" : "\n\n");
+                        odesc += "Returns: " + m.returns;
+                    }
+                    const std::string odesc_json =
+                        odesc.empty() ? "" : ("\"description\":\"" + oa_esc(odesc) + "\",");
                     paths.push_back("\"" + path + "\":{\"post\":{\"summary\":\"" + m.name + "\"," +
-                                    tag + "," + params_arr + oa_args_request(m.params, c) +
-                                    ",\"responses\":{" + resps + "}}}");
+                                    odesc_json + tag + "," + params_arr +
+                                    oa_args_request(m.params, c) + ",\"responses\":{" + resps +
+                                    "}}}");
                 }
 
                 // schema for the class

@@ -1,0 +1,313 @@
+\chapter{Documentation}
+\label{ch:documentation}
+
+The previous chapter was about metadata you \emph{add}. This one is about
+metadata you already have.
+
+Your library is probably documented. Its headers carry \code{///} lines and
+\code{/** @param \ldots */} blocks, its declarations name their parameters, and
+its defaults are written down where they belong --- in the C++. Until you bind
+it, none of that reaches the people calling your library from Python or
+TypeScript: an annotation-only pipeline can say nothing your headers did not
+repeat, in rosetta's own vocabulary, a second time.
+
+rosetta reads the headers it is already opening. The result is that a generated
+binding arrives documented, with keyword arguments and working defaults, and
+you write nothing.
+
+\section{Turning it on}
+
+There is nothing to turn on. Harvesting is the default; the only setting is how
+to turn it \textbf{off}.
+
+\begin{lstlisting}[style=json]
+{ "doc_comments": false }     // default: true
+\end{lstlisting}
+
+Set it to \code{false} to generate exactly what earlier versions of rosetta did
+--- documentation from annotations alone, positional parameter names, no
+defaults. There is no per-class or per-target switch: the harvest is a property
+of the \emph{manifest}, and the backends decide what to do with what it finds.
+
+\section{An example, end to end}
+
+A header that never mentions rosetta:
+
+\begin{lstlisting}[style=cpp]
+/// The direction a polygon's vertices are wound in.
+enum class Winding {
+    CCW, ///< Counter-clockwise: a positive signed area.
+    CW,  ///< Clockwise: a negative signed area.
+};
+
+/**
+ * @brief A closed polygon, stored as parallel coordinate arrays.
+ */
+class Polygon {
+public:
+    /// The x coordinate of each vertex, in order.
+    std::vector<double> xs;
+
+    /**
+     * @brief Resample the outline at evenly spaced points.
+     *
+     * @param samples how many points to produce
+     * @param closed  whether to repeat the first point at the end
+     * @return the coordinates, x and y interleaved
+     */
+    std::vector<double> resample(int samples = 64, bool closed = true) const;
+};
+\end{lstlisting}
+
+\noindent
+becomes, in Python:
+
+\begin{lstlisting}[style=py]
+>>> help(polygon.Polygon.resample)
+resample(self, samples: int = 64, closed: bool = True) -> list[float]
+
+    Resample the outline at evenly spaced points.
+
+    Args:
+        samples: how many points to produce
+        closed: whether to repeat the first point at the end
+
+    Returns:
+        the coordinates, x and y interleaved
+
+>>> p.resample(samples=8, closed=False)   # keyword arguments
+>>> p.resample()                          # the C++ defaults apply
+\end{lstlisting}
+
+\noindent
+and, in the \code{.d.ts}:
+
+\begin{lstlisting}[style=js]
+/**
+ * Resample the outline at evenly spaced points.
+ * @param samples how many points to produce
+ * @param closed whether to repeat the first point at the end
+ * @returns the coordinates, x and y interleaved
+ */
+resample(samples?: number, closed?: boolean): number[];
+\end{lstlisting}
+
+\section{What is read}
+
+\begin{center}
+\small
+\begin{tabular}{@{}L{5.4cm}L{8.4cm}@{}}
+\toprule
+\textbf{In the header} & \textbf{In the IR} \\
+\midrule
+\code{///}, \code{//!}, \code{/** */}, \code{/*! */}, and trailing \code{///<} &
+  the member's documentation (\code{GenField::doc}, \code{GenMethod::doc}) \\
+\addlinespace
+\code{@brief}, \code{@details}, untagged prose & the same \\
+\addlinespace
+\code{@param <name> \ldots}, including the \code{[in]} / \code{[out]} /
+  \code{[in,out]} markers and text running over several lines &
+  \code{GenParam::doc} --- per argument, matched \textbf{by name} \\
+\addlinespace
+\code{@return}, \code{@returns}, \code{@result} & \code{GenMethod::returns} \\
+\addlinespace
+\code{@note}, \code{@warning}, \code{@deprecated}, \code{@throws},
+  \code{@pre}, \code{@post}, \code{@see}, \code{@since} &
+  labelled paragraphs appended to the documentation \\
+\addlinespace
+a comment above a \code{class} / \code{struct} & \code{GenClass::brief} \\
+\addlinespace
+\textbf{parameter names} in the declaration & \code{GenParam::name} \\
+\addlinespace
+\textbf{default arguments} (\code{int samples = 64}) &
+  \code{GenParam::has\_default} and \code{GenParam::default\_text} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\code{@tparam}, \code{@file}, \code{@ingroup}, \code{@defgroup} and the other
+bookkeeping commands are dropped --- they describe the source, not the API.
+
+\section{Which backend does what with it}
+
+Every backend receives the same IR. What each one can \emph{do} with it differs,
+because the host languages differ.
+
+\begin{center}
+\small
+\begin{tabular}{@{}lL{10.4cm}@{}}
+\toprule
+\textbf{Target} & \textbf{What it emits} \\
+\midrule
+\lang{python} \lang{nanobind} &
+  The docstring, with \code{Args:} and \code{Returns:} sections folded in ---
+  Python has one place for all of it. Parameter names become
+  \code{py::arg("\ldots")} / \code{nb::arg("\ldots")}, so calls take keyword
+  arguments; recovered defaults become real Python defaults. The class comment
+  is the type's docstring. \\
+\addlinespace
+\lang{typescript} &
+  A TSDoc block: the prose, one \code{@param} per documented argument, and
+  \code{@returns}. A defaulted parameter is declared \textbf{optional}
+  (\code{samples?: number}), so an editor offers the short call. \\
+\addlinespace
+\lang{markdown} \lang{html} &
+  The signature carries names and defaults; the \code{@param} text becomes a
+  list under each method, \code{@return} its own line. The class comment opens
+  the section. \\
+\addlinespace
+\lang{openapi} &
+  The operation \code{description}; each positional argument gets a
+  \code{title} (its name), a \code{description} (its \code{@param} text) and a
+  \code{default}. The wire shape does not change. \\
+\addlinespace
+\lang{csharp} &
+  A \code{/// <summary>} XML doc block, and real parameter names in the wrapper
+  signature. \\
+\addlinespace
+\lang{java} &
+  A Javadoc block, and real parameter names in the wrapper signature. \\
+\addlinespace
+\lang{qt} \lang{qml} \lang{imgui} &
+  A field's documentation becomes its tooltip, and parameter names label the
+  argument boxes of a method's call row --- an inspector built from a header
+  that was never written for one. \\
+\addlinespace
+\lang{node} \lang{wasm} \lang{lua} \lang{julia} &
+  Nothing. These runtimes have no docstring slot and their emitted wrappers
+  spell positional locals, so the names and text sit unused in the IR. For
+  \lang{node} and \lang{wasm}, \lang{typescript} is where they land ---
+  which is the argument for adding it. \\
+\addlinespace
+\lang{dynamic} &
+  Names and text sit in the emitted \code{MetaClass} tables, so a UI built by
+  querying the registry can show them without ever including your headers. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{note}
+Add \lang{typescript} to a manifest that already has \lang{node} or
+\lang{wasm}. It costs one line, compiles nothing, and it is the only place
+those two targets' documentation can go.
+\end{note}
+
+\section{Default arguments, and why they are different}
+
+Parameter \emph{names} come from reflection: \code{std::meta::identifier\_of}
+reads them from the declaration. So does the \emph{fact} of a default ---
+\code{std::meta::has\_default\_argument}. But P2996 offers no way to ask what
+the default \emph{expression was}, so its spelling is read from the header text
+instead.
+
+The two readings are of the same declaration, and they are
+\textbf{cross-checked}: a spelling is used only where reflection independently
+confirms there is a default to spell. Where they disagree, the text loses.
+
+That leaves the question of which expressions rosetta is willing to repeat into
+generated C++. The bar is high, because a wrong answer here does not produce a
+poor docstring --- it produces a binding that does not compile.
+
+\begin{center}
+\small
+\begin{tabular}{@{}L{6.6cm}L{7.2cm}@{}}
+\toprule
+\textbf{Accepted} & \textbf{Refused} \\
+\midrule
+literals: \code{64}, \code{1e-6}, \code{true}, \code{'x'},
+  \code{"polygon"} &
+  anything with a call: \code{Point(0, 0)}, \code{sizeof(int)} \\
+\addlinespace
+\code{\{\}} &
+  an expression: \code{a + b}, \code{n * 2} \\
+\addlinespace
+qualified-ids: \code{Winding::CCW},
+  \code{Limits::Max} &
+  a bare identifier: \code{kDefaultEpsilon} --- it would not resolve where the
+  binding spells it \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+A parameter whose default is refused is still \emph{known} to be optional, and
+the backends that only need that say so: \code{eps?: number} in the
+\code{.d.ts}, \code{required: false} in OpenAPI, \code{eps?} in the Markdown
+signature. Only Python, which needs the value itself, falls back to a required
+argument.
+
+\begin{warn}
+The Python family adds a rule of its own. pybind and nanobind convert an
+\code{arg} default into a Python object at \textbf{module import}, before any
+call --- so a default whose type is not registered yet does not degrade
+gracefully, it raises \code{arg(): could not convert default argument} and the
+whole module fails to import. Defaults are therefore emitted only for numbers,
+booleans, strings, and \textbf{enums bound in the same module}. Bind the enum
+(list it in \field{classes}) and \code{Winding::CCW} becomes a working Python
+default; leave it out and the default is silently withheld rather than breaking
+the import.
+\end{warn}
+
+\section{Precedence}
+
+Harvested text only ever fills a blank. In order:
+
+\begin{enumerate}[leftmargin=*]
+  \item an inline \code{[[= rosetta::doc\{"\ldots"\}]]} annotation --- the
+    harvester skips a member that carries one outright;
+  \item a JSON side-car entry (chapter~\ref{ch:annotations}), or a
+    \field{doc} on a manifest \field{functions} entry;
+  \item the header's own comment.
+\end{enumerate}
+
+So adopting this cannot change a binding you have already annotated, and the
+two mechanisms compose: annotate the handful of members that need a
+\code{range}, a \code{readonly} or a rewritten description, and let the headers
+document everything else.
+
+\section{What it will not do}
+
+The harvester is a \textbf{scanner, not a compiler}. It tracks namespaces, class
+bodies, access specifiers, comments, string and character literals and
+preprocessor lines, and it reads declarations well enough to get a name, its
+parameters and its defaults --- but it does not expand macros and does not
+follow \code{\#include}.
+
+Which is why nothing it finds is used on sight. Every entry is matched against
+the \textbf{reflected} signature before it is applied, by arity and by
+parameter names, and dropped when the two disagree. The consequences are worth
+stating plainly:
+
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Ambiguous overloads document neither.} Two entries of the same
+    arity whose names cannot tell them apart are both discarded --- a plausible
+    sentence on the wrong overload is worse than no sentence.
+  \item \textbf{A stale comment loses.} A \code{@param radius} naming an
+    argument the signature no longer has is dropped, not placed by position.
+  \item \textbf{Private members are never read.} A documented private field is
+    invisible to every backend, as it should be.
+  \item \textbf{Constructors, destructors and operators carry no documentation}
+    --- the IR has no slot for it. Constructor parameter \emph{names} do reach
+    \code{py::init} and the TypeScript \code{constructor(\ldots)}.
+  \item \textbf{Inherited members need their base bound.} A member flattened in
+    from a base declared in a header no \field{classes} entry names is not
+    covered; list that base as a class to reach it.
+  \item \textbf{Template classes are not matched.} The IR names a
+    specialisation (\code{SpatialFieldND<2>}); the header declares a template.
+\end{itemize}
+
+\begin{note}
+Harvesting reads only the headers the manifest names --- the ones listed by
+\field{classes}, their \field{extensions}, and \field{functions} --- resolved
+against \field{user\_include} exactly as the compiler will resolve them. A
+header that resolves nowhere contributes nothing and is not an error: it may be
+a \field{generated\_headers} entry that does not exist yet.
+\end{note}
+
+\section{Where to look next}
+
+\code{examples/doxygen} is this chapter as a runnable project: a documented
+header, a three-line manifest, and a \code{test.py} that asserts against the
+compiled module --- including all three of the cases above where rosetta
+deliberately does less than you might expect. The manifest field is in
+appendix~\ref{app:manifest}; the reference document is
+\code{docs/MANIFEST.md}.

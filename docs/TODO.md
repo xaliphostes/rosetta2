@@ -15,7 +15,7 @@
 # Details ignored about what is visited
 
 - Method qualifiers. `virtual` is now surfaced via `virtual_spec` (see Done). A `const` method, an `&&`-ref-qualified method, and a `noexcept` method still all reach method_instance<Fn> identically. Some backends care (pybind11 needs const-ness for py::const_; REST binding for safe vs. unsafe verbs). Same plumbing as `virtual_spec` — synthesize a marker into the annotation pack.
-- Parameter metadata. Parameter names and default arguments aren't surfaced. Python **kwargs-style binding really wants both. `identifier_of(param)` and `has_default_argument(param)` exist; nothing currently propagates them.
+- ~~Parameter metadata~~ — **done**. `gen_detail::params_of` reads each parameter's `identifier_of` and `has_default_argument`; `GenParam` carries `name` (positional `argN` only as a fallback for a parameter declared without one), `has_default`, and a `default_text` the tool harvests textually, since P2996 reports the FACT of a default but not its expression. Consumed by `py::arg` / `nb::arg`, the `.d.ts`, C#/Java signatures, OpenAPI and the doc backends. See `tests/param_names.cpp`.
 - Per-parameter annotations. `[[=range{0,1}]] double t` on a parameter is invisible — same plumbing as field annotations needs to repeat there.
 - Bit-fields, mutable, anonymous unions. Niche but real; a generator that claims "full reflection" should at least flag them so backends can refuse cleanly rather than miscompile.
 - Return-type metadata. The backend re-derives return_type_of(Fn) itself, fine — but `[[nodiscard]]`, ref/cv qualifiers, and `noexcept` get lost unless surfaced.
@@ -30,5 +30,7 @@
 5. Method qualifiers (`const` / `noexcept` / ref) + parameter names/defaults — the qualifiers follow the `virtual_spec` pattern exactly. (`const` / `noexcept` are now captured into the IR's `GenMethod` for trampoline signatures; still not surfaced to the *runtime* visitor pack.)
 6. ~~Have a backend *consume* `virtual_spec`~~ — done: **Python** emits pybind11 trampolines (`PYBIND11_OVERRIDE[_PURE]`) and **Node** emits N-API trampolines (`Js_T : public T, NapiTrampoline` with a function-identity recursion guard). Both verified end-to-end — the generated module compiles and a Python/JS subclass override dispatches back through the C++ virtual (see `examples/trampoline` and `examples/trampoline-node`). Julia still ignores it; the N-API path carries a by-value-marshalling caveat (a trampolined type passed by value is sliced).
 7. Operators & static fields / nested types.
+8. ~~Parameter names / defaults~~ — done (item 5's second half). What is left of 5 is the qualifiers reaching the *runtime* visitor pack.
+9. ~~Documentation for the generated binding~~ — done, but NOT via the walk: comments are not reflectable, so `rosetta_gen` reads them out of the header text (`tools/rosetta_gen/doccomments.cpp`) and `generate()` matches the result onto the reflected signatures. Per-parameter annotations (below) remain the reflection-side gap.
 
 All remaining items are additive — no further walker-signature changes are required.

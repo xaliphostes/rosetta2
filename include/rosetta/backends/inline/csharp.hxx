@@ -233,19 +233,86 @@ those. Members using any other type are omitted from both sides.
         }
 
         // "double arg0, double arg1"
+        // A parameter name safe to DECLARE in C#. The IR carries the identifier
+        // the C++ declaration used, and C++ is happy to name a parameter
+        // `string`, `event`, `params` or `object` — each a keyword here, and a
+        // syntax error in the generated wrapper. Such a name reverts to the
+        // positional form. Both the declaration and the forwarding call go
+        // through this, so they cannot disagree.
+        inline std::string cs_ident(const std::string &name, std::size_t index) {
+            static const char *kw[] = {
+                "abstract","as","base","bool","break","byte","case","catch","char","checked",
+                "class","const","continue","decimal","default","delegate","do","double","else",
+                "enum","event","explicit","extern","false","finally","fixed","float","for",
+                "foreach","goto","if","implicit","in","int","interface","internal","is","lock",
+                "long","namespace","new","null","object","operator","out","override","params",
+                "private","protected","public","readonly","ref","return","sbyte","sealed","short",
+                "sizeof","stackalloc","static","string","struct","switch","this","throw","true",
+                "try","typeof","uint","ulong","unchecked","unsafe","ushort","using","virtual",
+                "void","volatile","while",
+            };
+            for (const char *k : kw) {
+                if (name == k) {
+                    return "arg" + std::to_string(index);
+                }
+            }
+            return name.empty() ? "arg" + std::to_string(index) : name;
+        }
+
+        // A C# XML doc comment. Rendered line by line: `///` documents ONE line,
+        // so a harvested multi-paragraph comment written on a single one would
+        // spill its tail into the code. `<` and `&` are escaped because this is
+        // XML, and a doc mentioning `std::vector<double>` is otherwise malformed.
+        inline std::string cs_doc(const std::string &doc, const std::string &indent) {
+            if (doc.empty()) {
+                return {};
+            }
+            std::string esc;
+            for (char ch : doc) {
+                if (ch == '<') {
+                    esc += "&lt;";
+                } else if (ch == '>') {
+                    esc += "&gt;";
+                } else if (ch == '&') {
+                    esc += "&amp;";
+                } else {
+                    esc += ch;
+                }
+            }
+            // A blank line is written as "///", not "/// " — the paragraph break
+            // has to survive, trailing whitespace does not.
+            const auto doc_line = [&indent](std::string &o, const std::string &l) {
+                o += indent + (l.empty() ? "///" : "/// " + l) + "\n";
+            };
+            std::string out = indent + "/// <summary>\n";
+            std::string line;
+            for (char ch : esc) {
+                if (ch == '\n') {
+                    doc_line(out, line);
+                    line.clear();
+                    continue;
+                }
+                line += ch;
+            }
+            doc_line(out, line);
+            // No trailing newline: every call site places this block relative to
+            // the declaration it documents and adds its own.
+            return out + indent + "/// </summary>";
+        }
+
         inline std::string cs_param_sig(const std::vector<GenParam> &ps, const GenContext &c) {
             std::string s;
             for (std::size_t i = 0; i < ps.size(); ++i) {
-                s += (i ? ", " : "") + cs_type(ps[i].type, c) + " " + ps[i].name;
+                s += (i ? ", " : "") + cs_type(ps[i].type, c) + " " + cs_ident(ps[i].name, i);
             }
             return s;
         }
 
-        // "arg0, arg1" — the argument list forwarded to Rt.Args(...).
+        // The argument list forwarded to Rt.Args(...), matching cs_param_sig.
         inline std::string cs_arg_names(const std::vector<GenParam> &ps) {
             std::string s;
             for (std::size_t i = 0; i < ps.size(); ++i) {
-                s += (i ? ", " : "") + ps[i].name;
+                s += (i ? ", " : "") + cs_ident(ps[i].name, i);
             }
             return s;
         }
@@ -403,7 +470,7 @@ those. Members using any other type are omitted from both sides.
                 }
                 const std::string ty = cs_type(f.type, c);
                 if (!f.doc.empty()) {
-                    s += "\n        /// <summary>" + f.doc + "</summary>";
+                    s += "\n" + cs_doc(f.doc, "        ");
                 }
                 s += "\n        public " + ty + " " + f.name + " {\n";
                 s += "            get => Rt.Get<" + ty +
@@ -424,7 +491,7 @@ those. Members using any other type are omitted from both sides.
                 const std::string names  = cs_arg_names(m.params);
                 const std::string argexp = "Rt.Args(" + names + ")";
                 if (!m.doc.empty()) {
-                    s += "\n        /// <summary>" + m.doc + "</summary>";
+                    s += "\n" + cs_doc(m.doc, "        ");
                 }
                 s += "\n        public " + std::string(m.is_static ? "static " : "");
                 const std::string callexpr =
@@ -485,7 +552,7 @@ those. Members using any other type are omitted from both sides.
                     const std::string call =
                         "Native.rosetta_csharp_call_function(\"" + f.name + "\", " + argexp + ")";
                     if (!f.doc.empty()) {
-                        s += "        /// <summary>" + f.doc + "</summary>\n";
+                        s += cs_doc(f.doc, "        ") + "\n";
                     }
                     s += "        public static ";
                     if (f.ret.kind == "void") {

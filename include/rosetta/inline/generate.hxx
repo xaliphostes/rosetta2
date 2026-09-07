@@ -1273,42 +1273,91 @@ endif()
             fill_callback_sig_impl(g, std::type_identity<F>{});
         }
 
-        template <std::meta::info Fn, std::size_t... Is>
-        inline std::vector<GenParam> params_impl(std::index_sequence<Is...>) {
-            constexpr auto        ps = std::define_static_array(std::meta::parameters_of(Fn));
-            std::vector<GenParam> out;
-            (out.push_back(GenParam{
-                 "arg" + std::to_string(Is),
-                 type_descriptor<std::remove_cvref_t<typename[:std::meta::type_of(ps[Is]):]>>(),
-                 std::is_lvalue_reference_v<typename[:std::meta::type_of(ps[Is]):]>,
-                 std::is_lvalue_reference_v<typename[:std::meta::type_of(ps[Is]):]> &&
-                     !std::is_const_v<std::remove_reference_t<
-                         typename[:std::meta::type_of(ps[Is]):]>>}),
-             ...);
-            return out;
+        // Give every parameter that has no identifier of its own the positional
+        // name backends used before names were read at all, so `name` is never
+        // empty and a partially-named signature still renders. The index is the
+        // parameter's own position, so `f(double, int n)` documents as
+        // (arg0, n) — not (arg0, arg1) and not (n, arg1).
+        inline void name_unnamed_params(std::vector<GenParam> &params) {
+            for (std::size_t i = 0; i < params.size(); ++i) {
+                if (params[i].name.empty()) {
+                    params[i].name = "arg" + std::to_string(i);
+                }
+            }
         }
 
+        // The parameters of `Fn`, with each one's own identifier and whether it
+        // carries a default argument.
+        //
+        // Written as a `template for` over the parameter reflections rather than
+        // an index_sequence pack, and that is not a style choice. A helper
+        // parameterized on the parameter reflection —
+        // `template <std::meta::info P> constexpr const char *name_of()` — has
+        // its instantiations COLLAPSE across different parameters under
+        // clang-p2996: every call in a translation unit returns whichever one
+        // was instantiated last, so `Circle::area(radius, segments, closed)`
+        // silently reports another function's parameter names. `template for`
+        // keeps each `std::define_static_string` at the point of use, where the
+        // reflection is a constexpr local rather than a template argument, and
+        // reads correctly. Do not "simplify" this back into a pack helper
+        // without re-checking tests/param_names.cpp, which pins the behaviour.
         template <std::meta::info Fn> inline std::vector<GenParam> params_of() {
-            constexpr auto n = std::define_static_array(std::meta::parameters_of(Fn)).size();
-            return params_impl<Fn>(std::make_index_sequence<n>{});
+            std::vector<GenParam> out;
+            template for (constexpr auto p :
+                          std::define_static_array(std::meta::parameters_of(Fn))) {
+                using P = typename[:std::meta::type_of(p):];
+                GenParam gp;
+                // A parameter declared without a name — `void f(double, int n)`,
+                // routine in an interface header — has no identifier to read;
+                // the positional fallback below fills it in.
+                if constexpr (std::meta::has_identifier(p)) {
+                    constexpr const char *id =
+                        std::define_static_string(std::meta::identifier_of(p));
+                    gp.name = id;
+                }
+                gp.type           = type_descriptor<std::remove_cvref_t<P>>();
+                gp.is_ref         = std::is_lvalue_reference_v<P>;
+                gp.is_mutable_ref = std::is_lvalue_reference_v<P> &&
+                                    !std::is_const_v<std::remove_reference_t<P>>;
+                constexpr bool has_def = std::meta::has_default_argument(p);
+                gp.has_default         = has_def;
+                out.push_back(std::move(gp));
+            }
+            name_unnamed_params(out);
+            return out;
         }
 
         // Same GenParam shape, built from a TYPE pack instead of from a
         // function's reflection. This is the overload-selection path: an
         // overloaded name has no reflection to walk (`^^name` is ill-formed for
         // an overload set), but its signature — a plain function type — decomposes
-        // here. Kept beside params_impl so the two stay in step; the ref /
+        // here. Kept beside params_of so the two stay in step; the ref /
         // mutable-ref rules are literally the same expressions.
+        //
+        // A function TYPE carries no declaration, so this path cannot know
+        // parameter names or default arguments: every entry keeps the positional
+        // "argN" and has_default stays false. Harvested doc comments can still
+        // reach it — apply_doc_comments matches such an entry by arity alone,
+        // and takes the parameter names from the header when it does.
         template <typename... A> inline std::vector<GenParam> params_from_types() {
             std::vector<GenParam> out;
             out.reserve(sizeof...(A));
             std::size_t i = 0;
-            (out.push_back(GenParam{
-                 "arg" + std::to_string(i++), type_descriptor<std::remove_cvref_t<A>>(),
-                 std::is_lvalue_reference_v<A>,
-                 std::is_lvalue_reference_v<A> &&
-                     !std::is_const_v<std::remove_reference_t<A>>}),
-             ...);
+            // Field-by-field rather than an aggregate initializer: GenParam has
+            // grown a doc string and two default-argument members between `type`
+            // and `is_ref`, and a positional list silently assigns the wrong
+            // ones the next time it grows again.
+            (
+                [&] {
+                    GenParam gp;
+                    gp.name           = "arg" + std::to_string(i++);
+                    gp.type           = type_descriptor<std::remove_cvref_t<A>>();
+                    gp.is_ref         = std::is_lvalue_reference_v<A>;
+                    gp.is_mutable_ref = std::is_lvalue_reference_v<A> &&
+                                        !std::is_const_v<std::remove_reference_t<A>>;
+                    out.push_back(std::move(gp));
+                }(),
+                ...);
             return out;
         }
 
@@ -1784,8 +1833,28 @@ endif()
         // rendered from the erased IR. Used as GenClass::doc (README bodies and
         // the markdown backend) and by rosetta::to_markdown<T>(). Mirrors what the
         // former <rosetta/docgen.h> produced, but from GenClass rather than a walk.
+        // One parameter as a reader sees it: `name: type = default`, with the
+        // default shown only when its spelling was recovered. A parameter known
+        // to be optional but whose default could not be spelled reads
+        // `name?: type`, which is true and says less rather than saying wrong.
+        inline std::string readable_param(const GenParam &p) {
+            std::string s = p.name;
+            if (p.has_default && p.default_text.empty()) {
+                s += "?";
+            }
+            s += ": " + readable_type(p.type);
+            if (!p.default_text.empty()) {
+                s += " = " + p.default_text;
+            }
+            return s;
+        }
+
         inline std::string class_markdown(const GenClass &gc) {
             std::string out = "# " + exposed_of(gc) + "\n\n";
+            // The class's own documentation, when the header carried one.
+            if (!gc.brief.empty()) {
+                out += gc.brief + "\n\n";
+            }
             if (!gc.fields.empty()) {
                 out +=
                     "## Fields\n\n| Name | Type | Description |\n|------|------|-------------|\n";
@@ -1822,12 +1891,30 @@ endif()
                     out += (m.is_static ? "static " : "");
                     out += m.name + "(";
                     for (std::size_t i = 0; i < m.params.size(); ++i) {
-                        out += (i ? ", " : "") + m.params[i].name + ": " +
-                               readable_type(m.params[i].type);
+                        out += (i ? ", " : "") + readable_param(m.params[i]);
                     }
                     out += ") → " + readable_type(m.ret) + "`\n\n";
                     if (!m.doc.empty()) {
                         out += m.doc + "\n\n";
+                    }
+                    // Per-parameter documentation gets its own list rather than
+                    // being folded into the prose: it is the part a reader scans
+                    // for, and a table of one line per argument is what every
+                    // other reference for this API looks like.
+                    bool any_param_doc = false;
+                    for (const auto &p : m.params) {
+                        any_param_doc = any_param_doc || !p.doc.empty();
+                    }
+                    if (any_param_doc) {
+                        for (const auto &p : m.params) {
+                            if (!p.doc.empty()) {
+                                out += "- `" + p.name + "` — " + p.doc + "\n";
+                            }
+                        }
+                        out += "\n";
+                    }
+                    if (!m.returns.empty()) {
+                        out += "*Returns:* " + m.returns + "\n\n";
                     }
                 }
             }
@@ -2235,6 +2322,192 @@ endif()
                 }
             }
             return false;
+        }
+
+        // ---- harvested doc comments -> the IR ---------------------------------
+        //
+        // rosetta_gen reads the bound headers as TEXT (tools/rosetta_gen/
+        // doccomments.cpp) and hands the result over as GenerateOptions::
+        // doc_comments. That text was never type-checked, so nothing below trusts
+        // it: every entry has to be matched to a reflected signature first, and
+        // whatever cannot be matched confidently is dropped rather than guessed.
+        //
+        // The rule throughout is FILL, NEVER OVERWRITE. An annotation the author
+        // wrote for rosetta — inline or through the JSON side-car — is a
+        // deliberate statement about the binding; a comment in the header is the
+        // library's own prose. Where both exist the annotation wins, so harvested
+        // text only ever lands in a field that is still empty.
+
+        // Is `name` the positional fallback params_of assigns to an unnamed
+        // parameter at this index? Only such a name may be replaced by a
+        // harvested one — a name reflection actually read always wins.
+        inline bool is_positional_name(const std::string &name, std::size_t index) {
+            return name == "arg" + std::to_string(index);
+        }
+
+        // Do a harvested entry's parameter names agree with the reflected ones?
+        // Positions where either side has no name of its own abstain rather than
+        // disagree: an unnamed parameter is information neither side has.
+        inline bool doc_params_match(const DocEntry &e, const std::vector<GenParam> &params) {
+            if (e.params.size() != params.size()) {
+                return false;
+            }
+            for (std::size_t i = 0; i < params.size(); ++i) {
+                if (e.params[i].name.empty() || is_positional_name(params[i].name, i)) {
+                    continue;
+                }
+                if (e.params[i].name != params[i].name) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // Pick the harvested entry describing this signature, out of everything
+        // recorded under the name. Returns nullptr when the choice is not clear.
+        //
+        // Overloads are the whole difficulty: "Grid::at" may hold two entries and
+        // attaching the wrong one puts a real, plausible, WRONG sentence on a
+        // binding — worse than leaving it undocumented. So the arity has to
+        // match, the names have to agree, and if two entries still both fit,
+        // neither is chosen.
+        inline const DocEntry *pick_doc_entry(const std::vector<DocEntry> &entries,
+                                              const std::vector<GenParam> &params,
+                                              bool                         want_function) {
+            const DocEntry *found = nullptr;
+            for (const DocEntry &e : entries) {
+                if (e.is_function != want_function) {
+                    continue;
+                }
+                if (want_function && !doc_params_match(e, params)) {
+                    continue;
+                }
+                if (found != nullptr) {
+                    return nullptr; // ambiguous — say nothing
+                }
+                found = &e;
+            }
+            return found;
+        }
+
+        // The harvested entries recorded under any of `keys`, most qualified
+        // first. Mirrors how "out_params" and "final" accept either spelling.
+        inline const std::vector<DocEntry> *
+        find_docs(const std::map<std::string, std::vector<DocEntry>> &docs,
+                  const std::vector<std::string>                     &keys) {
+            for (const std::string &k : keys) {
+                if (k.empty()) {
+                    continue;
+                }
+                const auto it = docs.find(k);
+                if (it != docs.end() && !it->second.empty()) {
+                    return &it->second;
+                }
+            }
+            return nullptr;
+        }
+
+        // Move one entry's text onto a reflected signature.
+        inline void fill_from_doc(const DocEntry &e, std::string &doc, std::string &returns,
+                                  std::vector<GenParam> &params) {
+            if (doc.empty()) {
+                doc = e.doc;
+            }
+            if (returns.empty()) {
+                returns = e.returns;
+            }
+            if (e.params.size() != params.size()) {
+                return; // a field, or a signature that did not match after all
+            }
+            for (std::size_t i = 0; i < params.size(); ++i) {
+                if (params[i].doc.empty()) {
+                    params[i].doc = e.params[i].doc;
+                }
+                // A name the header spells is better than "argN" — this is what
+                // gives the overload-selection path (a function TYPE, with no
+                // declaration behind it) real parameter names.
+                if (!e.params[i].name.empty() && is_positional_name(params[i].name, i)) {
+                    params[i].name = e.params[i].name;
+                }
+                // The default's SPELLING is only taken where reflection
+                // independently confirmed there is a default to spell. The two
+                // readings are of the same declaration, so a disagreement means
+                // the text was misread — and this one ends up in generated C++,
+                // where a wrong answer does not compile.
+                if (params[i].has_default && params[i].default_text.empty()) {
+                    params[i].default_text = e.params[i].default_text;
+                }
+            }
+        }
+
+        // Apply the whole harvest. Called by generate() after the walk and after
+        // extensions are attached, so every method that will exist is present.
+        inline void apply_doc_comments(std::vector<GenClass>                              &classes,
+                                       std::vector<GenFunction>                           &functions,
+                                       const std::map<std::string, std::vector<DocEntry>> &docs) {
+            if (docs.empty()) {
+                return;
+            }
+            for (GenClass &k : classes) {
+                const std::string kq = qualified_of(k);
+                // The class's own comment.
+                if (k.brief.empty()) {
+                    if (const std::vector<DocEntry> *e = find_docs(docs, {kq, k.name})) {
+                        if (const DocEntry *pick = pick_doc_entry(*e, {}, /*want_function=*/false)) {
+                            k.brief = pick->doc;
+                        }
+                    }
+                }
+                for (GenField &f : k.fields) {
+                    if (!f.doc.empty()) {
+                        continue;
+                    }
+                    const std::vector<DocEntry> *e =
+                        find_docs(docs, {kq + "::" + f.name, k.name + "::" + f.name});
+                    if (e == nullptr) {
+                        continue;
+                    }
+                    if (const DocEntry *pick = pick_doc_entry(*e, {}, /*want_function=*/false)) {
+                        f.doc = pick->doc;
+                    }
+                }
+                for (GenMethod &m : k.methods) {
+                    // An extension method is a free function wearing a method's
+                    // name, so it is documented where it is DECLARED.
+                    std::vector<std::string> keys;
+                    if (m.is_extension && !m.ext_qualified.empty()) {
+                        keys.push_back(m.ext_qualified);
+                        const auto pos = m.ext_qualified.rfind("::");
+                        keys.push_back(pos == std::string::npos ? m.ext_qualified
+                                                                : m.ext_qualified.substr(pos + 2));
+                    } else {
+                        keys.push_back(kq + "::" + m.name);
+                        keys.push_back(k.name + "::" + m.name);
+                    }
+                    const std::vector<DocEntry> *e = find_docs(docs, keys);
+                    if (e == nullptr) {
+                        continue;
+                    }
+                    if (const DocEntry *pick =
+                            pick_doc_entry(*e, m.params, /*want_function=*/true)) {
+                        fill_from_doc(*pick, m.doc, m.returns, m.params);
+                    }
+                }
+            }
+            for (GenFunction &f : functions) {
+                std::vector<std::string> keys{f.qualified};
+                const auto               pos = f.qualified.rfind("::");
+                if (pos != std::string::npos) {
+                    keys.push_back(f.qualified.substr(pos + 2));
+                }
+                const std::vector<DocEntry> *e = find_docs(docs, keys);
+                if (e == nullptr) {
+                    continue;
+                }
+                if (const DocEntry *pick = pick_doc_entry(*e, f.params, /*want_function=*/true)) {
+                    fill_from_doc(*pick, f.doc, f.returns, f.params);
+                }
+            }
         }
 
         // The C++ type of the local the adapter declares for an out-parameter:
@@ -2747,6 +3020,16 @@ namespace rosetta {
             // Refresh the class doc fragment so extension methods show up in
             // the markdown/html output like any other method.
             target->doc = gen_detail::class_markdown(*target);
+        }
+
+        // Doc comments harvested from the headers (manifest "doc_comments").
+        // Applied HERE — after extensions have joined the method lists — so an
+        // extension method is documented from its own declaration like anything
+        // else, and before the markdown fragments are refreshed below so the
+        // rendered docs carry the harvested text.
+        gen_detail::apply_doc_comments(classes, functions, opt.doc_comments);
+        for (GenClass &k : classes) {
+            k.doc = gen_detail::class_markdown(k);
         }
 
         // Headers the bound library's own build system would have generated

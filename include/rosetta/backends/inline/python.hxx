@@ -381,15 +381,39 @@ pipx run cibuildwheel --platform auto
 that built it (`cp312-cp312-...`) — covering several versions means running the
 script once per interpreter.)MD";
 
-        // Escape a docstring for a C++ string literal (backslash + quote only;
-        // annotation text is short single-line prose in practice).
+        // Escape a docstring for a C++ string literal.
+        //
+        // Line breaks matter here. This used to escape backslashes and quotes
+        // only, which held while every docstring came from a `doc{"..."}`
+        // annotation — those are single-line by construction, since the source
+        // of one is itself a C++ string literal. A docstring harvested from a
+        // header is not: a `/** ... */` block spans paragraphs, and a raw
+        // newline inside a "..." literal does not compile. Everything that can
+        // end or confuse the literal is spelled out.
+        //
+        // Shared by the nanobind, imgui and qt emitters as well as this one.
         inline std::string py_lit(const std::string &s) {
             std::string out;
-            for (char ch : s) {
-                if (ch == '\\' || ch == '"') {
-                    out += '\\';
+            for (unsigned char ch : s) {
+                switch (ch) {
+                case '\\': out += "\\\\"; break;
+                case '"':  out += "\\\""; break;
+                case '\n': out += "\\n";  break;
+                case '\r': out += "\\r";  break;
+                case '\t': out += "\\t";  break;
+                default:
+                    if (ch < 0x20 || ch == 0x7f) {
+                        char buf[8];
+                        std::snprintf(buf, sizeof buf, "\\x%02x", ch);
+                        out += buf;
+                        // Hex escapes are greedy: close and reopen the literal
+                        // so a following hex digit is not swallowed into it.
+                        out += "\"\"";
+                    } else {
+                        out += static_cast<char>(ch); // UTF-8 passes through
+                    }
+                    break;
                 }
-                out += ch;
             }
             return out;
         }
@@ -397,6 +421,127 @@ script once per interpreter.)MD";
         // Trailing `, "doc"` for a pybind call, or empty when there is no doc.
         inline std::string doc_arg(const std::string &doc) {
             return doc.empty() ? std::string{} : ", \"" + py_lit(doc) + "\"";
+        }
+
+        // The docstring pybind/nanobind attach to a method, with the parameter
+        // and return documentation folded in. Python has no structured place for
+        // either — `help()` prints the docstring — so the convention every hand
+        // written binding follows is a section per argument, which is what this
+        // renders. `py::arg` still carries the NAMES; this carries their prose.
+        inline std::string px_method_doc(const GenMethod &m) {
+            std::string out = m.doc;
+            bool        any = false;
+            for (const auto &p : m.params) {
+                any = any || (!p.doc.empty() && !is_out_param(p));
+            }
+            if (any) {
+                out += out.empty() ? "" : "\n\n";
+                out += "Args:";
+                for (const auto &p : m.params) {
+                    if (p.doc.empty() || is_out_param(p)) {
+                        continue;
+                    }
+                    out += "\n    " + p.name + ": " + p.doc;
+                }
+            }
+            if (!m.returns.empty()) {
+                out += out.empty() ? "" : "\n\n";
+                out += "Returns:\n    " + m.returns;
+            }
+            return out;
+        }
+
+        // Same, for a free function: GenFunction carries the same doc / returns
+        // / per-parameter text, and Python has the same one place to put it.
+        inline std::string px_method_doc(const GenFunction &f) {
+            GenMethod probe;
+            probe.doc     = f.doc;
+            probe.returns = f.returns;
+            probe.params  = f.params;
+            return px_method_doc(probe);
+        }
+
+        // The `, py::arg("x"), py::arg("n") = 32` tail that turns a positional
+        // binding into a keyword-argument one. `ns` is "py" or "nb" — the two
+        // frameworks spell the annotation identically otherwise.
+        //
+        // Two rules keep this from producing a module that fails to import:
+        //
+        //  - the list is ALL or NOTHING. pybind11 requires exactly one arg
+        //    annotation per parameter (self excluded, which it accounts for
+        //    itself through is_method), so a partial list is a static_assert.
+        //    Out-parameters are not parameters of the emitted callable — the
+        //    adapter declares them as locals — so they are excluded here too,
+        //    matching px_seq_sig.
+        //  - defaults are applied only along the TRAILING run of parameters
+        //    whose spelling was actually recovered. A default may be missing
+        //    from the middle of the list (the harvester declines an expression
+        //    it cannot re-emit safely), and "a default followed by a
+        //    non-default" is rejected at import time.
+        //
+        // Nothing is emitted at all when no parameter has a real name or a
+        // default: `py::arg("arg0")` promises a keyword nobody wants to type.
+        //
+        // May a default of this TYPE be spelled at all? pybind converts an
+        // `arg` default into a Python object AT MODULE IMPORT, before any call —
+        // so a default whose type is not registered yet does not degrade, it
+        // throws `arg(): could not convert default argument` and the whole
+        // module fails to import. Scalars and strings are always convertible.
+        // An enum is convertible only once bound, which holds for an enum in
+        // this module because both emitters register enums ahead of classes;
+        // an enum the manifest did not bind, and every class type, is refused.
+        inline bool px_default_ok(const GenType &t, const GenContext &c) {
+            if (t.kind == "number" || t.kind == "boolean" || t.kind == "string") {
+                return true;
+            }
+            if (t.kind != "enum") {
+                return false;
+            }
+            for (const auto &e : c.enums) {
+                const bool match = t.object_qualified.empty()
+                                       ? (e.name == t.object)
+                                       : (qualified_of(e) == t.object_qualified);
+                if (match) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        inline std::string px_arg_list(const std::vector<GenParam> &params, const char *ns,
+                                       const GenContext &c) {
+            std::vector<const GenParam *> kept;
+            for (const auto &p : params) {
+                if (!is_out_param(p)) {
+                    kept.push_back(&p);
+                }
+            }
+            if (kept.empty()) {
+                return {};
+            }
+            bool worth = false;
+            for (std::size_t i = 0; i < kept.size(); ++i) {
+                worth = worth || !kept[i]->default_text.empty() ||
+                        kept[i]->name != "arg" + std::to_string(i);
+            }
+            if (!worth) {
+                return {};
+            }
+            std::vector<bool> with_default(kept.size(), false);
+            for (std::size_t i = kept.size(); i-- > 0;) {
+                if (kept[i]->default_text.empty() || !px_default_ok(kept[i]->type, c)) {
+                    break;
+                }
+                with_default[i] = true;
+            }
+            std::string out;
+            for (std::size_t i = 0; i < kept.size(); ++i) {
+                out += ", " + std::string(ns) + "::arg(\"" + kept[i]->name + "\")";
+                if (with_default[i]) {
+                    out += " = " + kept[i]->default_text;
+                }
+            }
+            return out;
         }
 
         // Re-qualify standard-library names in an exact type spelling. The
@@ -685,6 +830,14 @@ script once per interpreter.)MD";
         // Defined below (it needs the bound-class lookup): does this method
         // return an lvalue reference that binds with `reference_internal`?
         inline bool px_ref_return(const GenMethod &m, const GenContext &c);
+
+        // Defined below (they need the bound-class lookup): is this type a raw
+        // pointer to a bound class, and what keep_alive attributes does a
+        // method's parameter list need? Declared here because the sequence
+        // adapter above emits methods too.
+        inline bool        px_borrowed_pointer(const GenType &t, const GenContext &c);
+        inline std::string px_keep_alive(const GenMethod &m, const GenContext &c,
+                                         const char *ns);
 
         inline bool px_method_ok(const GenMethod &m, const GenContext &c) {
             // An overload set is NOT rejected here: the walk keeps its
@@ -988,7 +1141,8 @@ script once per interpreter.)MD";
         }
 
         // The full def(...) for a sequence-adapted method / extension / static.
-        inline std::string px_seq_method(const GenClass &k, const GenMethod &m) {
+        inline std::string px_seq_method(const GenClass &k, const GenMethod &m,
+                                         const GenContext &c) {
             const PxSeqSig    sig = px_seq_sig(m.params, m.param_cpp);
             const std::string kq  = qualified_of(k);
             std::string       decls, call;
@@ -1018,7 +1172,8 @@ script once per interpreter.)MD";
             }
             const std::string def = m.is_static ? "def_static" : "def";
             return "    c." + def + "(\"" + m.name + "\", [](" + decls + ") {\n" + body +
-                   "    }" + doc_arg(m.doc) + ");\n";
+                   "    }" + px_keep_alive(m, c, "py") + doc_arg(px_method_doc(m)) +
+                   px_arg_list(m.params, "py", c) + ");\n";
         }
 
         // A sequence-typed field: def_property copying through the boundary
@@ -1073,6 +1228,82 @@ script once per interpreter.)MD";
                    m.ret_cpp.rfind("const", 0) != 0 && px_is_bound_class(m.ret, c);
         }
 
+        // Is this a RAW POINTER to a bound class — directly (`Surface *`) or as
+        // the element of a container (`std::vector<Triangle *>`)? True of a
+        // BORROWED handle: an object one side hands the other while the owner
+        // keeps using it. Both directions of the boundary need to know.
+        //
+        // OUT (a return): the automatic policy for a pointer is TAKE_OWNERSHIP,
+        // so the binding deletes the pointee when the wrapper is collected.
+        // arch::Model::addSurface() returns a Surface the Model keeps in its own
+        // list, and Model::triangles() a whole vector of Triangles it owns;
+        // letting either wrapper go out of scope frees them under the Model,
+        // after which nbDof() silently reports only the surfaces that happen to
+        // still be alive and the next solve reads freed memory. Hence
+        // reference_internal — see the policy sites.
+        //
+        // IN (a parameter): the callee may STORE the pointer
+        // (Model::addRemote(BaseRemote*) keeps it in a list and Model's
+        // destructor deletes nothing), so the argument has to outlive the call.
+        // Hence keep_alive — see px_keep_alive.
+        //
+        // A container is checked through its element because the list casters
+        // pass the policy down to each element, so setting it on the vector is
+        // what reaches the pointers inside.
+        //
+        // The cost of both choices is the same, and it is the survivable one:
+        // over-retention. A genuine factory (`Triangle *clone() const`) leaks,
+        // and pinning the argument of a pure query keeps it alive longer than
+        // needed. Nothing in a signature separates those from the borrowing
+        // case, so one reading has to be the default, and a leak beats a
+        // use-after-free.
+        inline bool px_borrowed_pointer(const GenType &t, const GenContext &c) {
+            if (t.is_pointer) {
+                return px_is_bound_class(t, c);
+            }
+            if (t.kind == "vector" && !t.element.empty()) {
+                return px_borrowed_pointer(t.element.front(), c);
+            }
+            return false;
+        }
+
+        // keep_alive attributes for the pointer parameters of `m`: one
+        // `keep_alive<1, N>` per borrowed-pointer argument, tying its lifetime
+        // to the receiver's. pybind11 and nanobind spell this identically, so
+        // `ns` picks the namespace ("py" / "nb").
+        //
+        // Slot numbering is the binding's, not C++'s: 1 is `self` and the
+        // parameters follow from 2. Out-parameters are skipped because they are
+        // not part of the emitted signature (they join the return) — the same
+        // filter px_arg_list applies, so the two agree on what argument N is.
+        // Extension methods need no adjustment: generate() already strips their
+        // leading `T&`, so their m.params start at slot 2 like a member's.
+        //
+        // Static methods and free functions get nothing: with no receiver there
+        // is no nurse to tie the argument to. A static factory that stores its
+        // argument would need `keep_alive<0, N>` (return value as nurse), which
+        // is a different claim about ownership than this one and should be
+        // stated explicitly rather than guessed.
+        inline std::string px_keep_alive(const GenMethod &m, const GenContext &c,
+                                         const char *ns) {
+            if (m.is_static) {
+                return {};
+            }
+            std::string out;
+            std::size_t slot = 2; // 1 is self
+            for (const auto &p : m.params) {
+                if (is_out_param(p)) {
+                    continue;
+                }
+                if (px_borrowed_pointer(p.type, c)) {
+                    out += ", " + std::string(ns) + "::keep_alive<1, " + std::to_string(slot) +
+                           ">()";
+                }
+                ++slot;
+            }
+            return out;
+        }
+
         // The member-function-pointer expression for `m`, disambiguated when it
         // needs to be. `&T::name` names an OVERLOAD SET, not a function, so for
         // any name the C++ class declares more than once it must be resolved by
@@ -1115,27 +1346,27 @@ script once per interpreter.)MD";
 
         inline std::string expanded_method(const GenClass &k, const GenMethod &m,
                                            const GenContext &c) {
-            const std::string dq = doc_arg(m.doc);
-            if (m.is_extension) {
-                // A fluent extension (`Cls &fn(Cls &, …)`) needs the policy for
-                // the same reason a member does.
-                const std::string ep =
-                    px_ref_return(m, c) ? ", py::return_value_policy::reference_internal" : "";
-                return "    c.def(\"" + m.name + "\", &" + m.ext_qualified + ep + dq + ");\n";
-            }
-            const std::string mp = px_member_pointer(k, m);
+            const std::string dq = doc_arg(px_method_doc(m));
+            const std::string aq = px_arg_list(m.params, "py", c);
+            const std::string ka = px_keep_alive(m, c, "py");
+            // A fluent extension (`Cls &fn(Cls &, …)`) needs the policy for the
+            // same reason a member does — it binds as an instance method, so
+            // `self` is argument 1 either way.
             const std::string policy =
-                m.ret.is_pointer
-                    ? (m.is_static ? ", py::return_value_policy::reference"
-                                   : ", py::return_value_policy::reference_internal")
-                : px_ref_return(m, c)
+                (px_borrowed_pointer(m.ret, c) || px_ref_return(m, c))
                     ? (m.is_static ? ", py::return_value_policy::reference"
                                    : ", py::return_value_policy::reference_internal")
                     : "";
-            if (m.is_static) {
-                return "    c.def_static(\"" + m.name + "\", " + mp + policy + dq + ");\n";
+            if (m.is_extension) {
+                return "    c.def(\"" + m.name + "\", &" + m.ext_qualified + policy + ka + dq +
+                       aq + ");\n";
             }
-            return "    c.def(\"" + m.name + "\", " + mp + policy + dq + ");\n";
+            const std::string mp = px_member_pointer(k, m);
+            if (m.is_static) {
+                return "    c.def_static(\"" + m.name + "\", " + mp + policy + ka + dq + aq +
+                       ");\n";
+            }
+            return "    c.def(\"" + m.name + "\", " + mp + policy + ka + dq + aq + ");\n";
         }
 
         // The constructors, as py::init<...>() lines. Exact param spellings come
@@ -1287,7 +1518,10 @@ script once per interpreter.)MD";
                 }
             }
             const std::string decl = "py::class_<" + kq + extra + ">";
-            std::string s = "    {\n        " + decl + " c(m, \"" + exposed_of(k) + "\");\n";
+            // The class's own doc comment becomes the Python type's docstring —
+            // what `help(Cls)` prints above the members.
+            std::string s = "    {\n        " + decl + " c(m, \"" + exposed_of(k) + "\"" +
+                            doc_arg(k.brief) + ");\n";
             // The block-local helper lines are written at one indent; reuse the
             // module-level emitters and shift them in by four spaces.
             auto indent = [](const std::string &block) {
@@ -1334,7 +1568,7 @@ script once per interpreter.)MD";
                     // foreign type (and an overloaded set is fine here, see
                     // px_seq_method).
                     if (seq_adaptable(m) && px_seq_rest_ok(m, c)) {
-                        s += indent(px_seq_method(k, m));
+                        s += indent(px_seq_method(k, m, c));
                         coverage::note_bound("python", k, m);
                     } else {
                         coverage::note_skip("python", k, m, "sequence_not_adaptable",
@@ -1390,7 +1624,8 @@ script once per interpreter.)MD";
                             body2 += "        return " + call + ";\n";
                         }
                         body += "    m.def(\"" + f.name + "\", [](" + sig.decls + ") {\n" +
-                                body2 + "    }" + doc_arg(f.doc) + ");\n";
+                                body2 + "    }" + doc_arg(px_method_doc(f)) +
+                                px_arg_list(f.params, "py", c) + ");\n";
                         coverage::note_bound_function("python", f);
                     } else {
                         coverage::note_skip_function("python", f, "sequence_not_adaptable",
@@ -1405,7 +1640,8 @@ script once per interpreter.)MD";
                                                  "signature");
                     continue;
                 }
-                body += "    m.def(\"" + f.name + "\", " + fn_addr(f) + doc_arg(f.doc) + ");\n";
+                body += "    m.def(\"" + f.name + "\", " + fn_addr(f) + doc_arg(px_method_doc(f)) +
+                        px_arg_list(f.params, "py", c) + ");\n";
                 coverage::note_bound_function("python", f);
             }
 

@@ -23,6 +23,40 @@ static const char *kDefaultCpp26Cxx  = "${CLANG_P2996_ROOT}/bin/clang++";
 static const char *kDefaultCpp26Cc   = "${CLANG_P2996_ROOT}/bin/clang";
 static const char *kDefaultCpp26Lib  = "${CLANG_P2996_ROOT}/lib";
 
+// Any string -> a C++ string literal that reproduces it exactly.
+//
+// Escaped rather than raw: a harvested docstring is arbitrary user prose, and a
+// raw literal needs a delimiter guaranteed absent from the text — a guarantee
+// no fixed delimiter has. Escaping has no such failure mode. Bytes >= 0x80 pass
+// through untouched so UTF-8 survives; the control characters that would end or
+// confuse the literal are the only ones spelled numerically.
+static std::string str_lit(const std::string &s) {
+    std::string out = "\"";
+    for (unsigned char ch : s) {
+        switch (ch) {
+        case '"':  out += "\\\""; break;
+        case '\\': out += "\\\\"; break;
+        case '\n': out += "\\n";  break;
+        case '\r': out += "\\r";  break;
+        case '\t': out += "\\t";  break;
+        default:
+            if (ch < 0x20 || ch == 0x7f) {
+                char buf[8];
+                // Hex escapes are greedy in C++, so close the literal and
+                // reopen it: "\x0c" followed by 'a' would otherwise read as
+                // one huge hex escape.
+                std::snprintf(buf, sizeof buf, "\\x%02x", ch);
+                out += buf;
+                out += "\"\"";
+            } else {
+                out += static_cast<char>(ch);
+            }
+            break;
+        }
+    }
+    return out + "\"";
+}
+
 // JSON bytes -> "char(0x7b), char(0x0a), ..." for a std::to_array<char> literal.
 // The explicit char() cast avoids a narrowing error for bytes >= 0x80 (UTF-8).
 static std::string render_byte_array(const std::string &data) {
@@ -309,6 +343,28 @@ static std::string render_project_gen_cpp(const Manifest &m) {
                 out << (i ? ", " : "") << indices[i];
             }
             out << "}},\n";
+        }
+        out << "    };\n";
+    }
+    // Doc comments harvested from the bound headers (manifest "doc_comments",
+    // on unless turned off). Emitted as data — every string goes out as a raw
+    // literal, because a docstring routinely contains quotes, backslashes and
+    // newlines, and a default argument may itself be a quoted string.
+    if (!m.harvested_docs.empty()) {
+        out << "    opt.doc_comments    = {\n";
+        for (const auto &kv : m.harvested_docs) {
+            out << "        {" << str_lit(kv.first) << ", {\n";
+            for (const DocEntryInfo &e : kv.second) {
+                out << "            {.doc = " << str_lit(e.doc)
+                    << ", .returns = " << str_lit(e.returns) << ", .params = {";
+                for (std::size_t i = 0; i < e.params.size(); ++i) {
+                    const DocParamInfo &p = e.params[i];
+                    out << (i ? ", " : "") << "{" << str_lit(p.name) << ", " << str_lit(p.doc)
+                        << ", " << str_lit(p.default_text) << "}";
+                }
+                out << "}, .is_function = " << (e.is_function ? "true" : "false") << "},\n";
+            }
+            out << "        }},\n";
         }
         out << "    };\n";
     }

@@ -64,17 +64,114 @@ namespace rosetta {
             return "any"; // unknown (e.g. std::function, unsupported types)
         }
 
+        // A parameter name that is safe to write in a `.d.ts`. The IR now
+        // carries the identifier the C++ declaration used, and C++ happily names
+        // a parameter `function`, `var` or `new` — each of which is a syntax
+        // error in a TypeScript parameter list. Such a name falls back to the
+        // positional form rather than breaking the whole declaration file.
+        inline std::string ts_param_name(const std::string &name, std::size_t index) {
+            static const char *reserved[] = {
+                "break",   "case",     "catch",  "class",   "const",    "continue", "debugger",
+                "default", "delete",   "do",     "else",    "enum",     "export",   "extends",
+                "false",   "finally",  "for",    "function","if",       "import",   "in",
+                "instanceof","new",    "null",   "return",  "super",    "switch",   "this",
+                "throw",   "true",     "try",    "typeof",  "var",      "void",     "while",
+                "with",    "yield",    "let",    "static",  "implements","interface","package",
+                "private", "protected","public", "await",
+            };
+            for (const char *r : reserved) {
+                if (name == r) {
+                    return "arg" + std::to_string(index);
+                }
+            }
+            return name.empty() ? "arg" + std::to_string(index) : name;
+        }
+
         // Out-parameters (manifest "out_params") are not arguments: the caller
         // receives them, so they leave the parameter list and join the return.
+        //
+        // A parameter with a default argument is declared OPTIONAL (`x?: T`).
+        // TypeScript requires every optional parameter to follow the required
+        // ones, which C++ guarantees for defaults — but only along the run that
+        // reaches the end: once an out-parameter is removed from the middle, or
+        // a trailing defaulted parameter is dropped, a `?` earlier in the list
+        // would not compile. So optionality is applied from the END backwards
+        // and stops at the first parameter that does not have a default.
         inline std::string ts_params(const std::vector<GenParam> &ps, const GenContext &c) {
+            std::vector<const GenParam *> kept;
+            for (const auto &p : ps) {
+                if (!is_out_param(p)) {
+                    kept.push_back(&p);
+                }
+            }
+            std::vector<bool> optional(kept.size(), false);
+            for (std::size_t i = kept.size(); i-- > 0;) {
+                if (!kept[i]->has_default) {
+                    break;
+                }
+                optional[i] = true;
+            }
             std::vector<std::string> parts;
+            for (std::size_t i = 0; i < kept.size(); ++i) {
+                parts.push_back(ts_param_name(kept[i]->name, i) + (optional[i] ? "?" : "") + ": " +
+                                ts_type(kept[i]->type, c));
+            }
+            return join(parts, ", ");
+        }
+
+        // The TSDoc block for a documented member: the prose, then one `@param`
+        // per documented argument, then `@returns`. Emitted only when there is
+        // something to say, so an undocumented API keeps its clean shape.
+        inline std::string ts_doc(const std::string &doc, const std::vector<GenParam> &ps,
+                                  const std::string &returns, const std::string &indent) {
+            bool any = !doc.empty() || !returns.empty();
+            for (const auto &p : ps) {
+                any = any || (!p.doc.empty() && !is_out_param(p));
+            }
+            if (!any) {
+                return {};
+            }
+            // A comment must not be able to close itself early.
+            auto safe = [](std::string s) {
+                for (std::size_t i = s.find("*/"); i != std::string::npos; i = s.find("*/", i)) {
+                    s.replace(i, 2, "*\\/");
+                }
+                return s;
+            };
+            // One " * " line per line of prose. A BLANK line is written as
+            // " *" with no trailing space — the paragraph break has to survive,
+            // but trailing whitespace in generated output does not.
+            const auto doc_line = [&indent](std::string &out, const std::string &line) {
+                out += indent + (line.empty() ? " *" : " * " + line) + "\n";
+            };
+            std::string out = indent + "/**\n";
+            if (!doc.empty()) {
+                std::string line;
+                for (char ch : safe(doc)) {
+                    if (ch == '\n') {
+                        doc_line(out, line);
+                        line.clear();
+                        continue;
+                    }
+                    line += ch;
+                }
+                doc_line(out, line);
+            }
+            std::size_t i = 0;
             for (const auto &p : ps) {
                 if (is_out_param(p)) {
                     continue;
                 }
-                parts.push_back(p.name + ": " + ts_type(p.type, c));
+                if (!p.doc.empty()) {
+                    out += indent + " * @param " + ts_param_name(p.name, i) + " " + safe(p.doc) +
+                           "\n";
+                }
+                ++i;
             }
-            return join(parts, ", ");
+            if (!returns.empty()) {
+                out += indent + " * @returns " + safe(returns) + "\n";
+            }
+            return out + indent + " */\n";
         }
 
         // The declared return: the type itself normally, and a TUPLE when the
@@ -114,6 +211,9 @@ namespace rosetta {
             }
 
             for (const auto &k : c.classes) {
+                if (!k.brief.empty()) {
+                    out += ts_doc(k.brief, {}, {}, "    ");
+                }
                 out += "    export class " + exposed_of(k) + " {\n";
 
                 for (const auto &ct : k.ctors) {
@@ -214,9 +314,7 @@ namespace rosetta {
                         }
                         continue;
                     }
-                    if (!m.doc.empty()) {
-                        out += "        /** " + m.doc + " */\n";
-                    }
+                    out += ts_doc(m.doc, m.params, m.returns, "        ");
                     out += "        " + std::string(m.is_static ? "static " : "") + m.name + "(" +
                            ts_params(m.params, c) + "): " + ts_return(m.ret, m.params, c) + ";\n";
                     coverage::note_bound("typescript", k, m);
@@ -256,9 +354,7 @@ namespace rosetta {
                               "that is not there");
                     continue;
                 }
-                if (!f.doc.empty()) {
-                    out += "    /** " + f.doc + " */\n";
-                }
+                out += ts_doc(f.doc, f.params, f.returns, "    ");
                 out += "    export function " + f.name + "(" + ts_params(f.params, c) +
                        "): " + ts_return(f.ret, f.params, c) + ";\n";
                 coverage::note_bound_function("typescript", f);

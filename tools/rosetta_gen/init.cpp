@@ -20,9 +20,10 @@
 // commonly-used field — a `variables` declaration feeding the cpp26_* toolchain
 // overrides (the case it was added for), a multi-entry user_include,
 // rosetta_include, generator_name / module_name, user_sources,
-// compile_definitions, build_type / optimization, a representative
-// spread of targets, and one example class and one example function — so the
-// user can delete what they don't need rather than hunt the docs for what exists.
+// compile_definitions, build_type / optimization, doc_comments, a
+// representative spread of targets, and one example class and one example
+// function — so the user can delete what they don't need rather than hunt the
+// docs for what exists.
 static std::string render_example_manifest() {
     return R"JSON({
     "//": "Rosetta binding manifest. Edit the fields below to match your project.",
@@ -64,6 +65,9 @@ static std::string render_example_manifest() {
     "//build": "Optional build configuration for every compiled backend's generated CMakeLists. build_type is the default CMAKE_BUILD_TYPE (Debug | Release | RelWithDebInfo | MinSizeRel; -DCMAKE_BUILD_TYPE=... at configure time still wins). optimization is an explicit -O flag (-O0..-O3, -Os, -Oz, -Og, -Ofast) added after the build type's own flags, so it overrides their -O level. Omit either if unused.",
     "build_type": "Release",
     "optimization": "-O2",
+
+    "//doc_comments": "Optional. true (the default) reads the Doxygen documentation and default arguments already in the bound headers -- /// and /** @param ... @return ... */ blocks -- and carries them into every backend, as Python docstrings + keyword arguments, TSDoc, Javadoc, C# XML docs, OpenAPI descriptions and the markdown/html reference. Annotations still win where both exist. Set false to generate from annotations alone.",
+    "doc_comments": true,
 
     "//targets": "A target is a bare string (\"python\", uses module_name) or {\"lang\": ..., \"name\": ...}. The bindings are fully expanded, so they build with a stock compiler. Per-target extras: \"link_options\" (this target's link line only), \"out_dir\" (where the built artifact is copied), the runtime pins \"python\"/\"requires_python\"/\"napi_version\"/\"node_engine\", and — on python/nanobind only — \"wheel\"/\"wheel_dir\" to build a redistributable wheel on every --build.",
     "targets": [

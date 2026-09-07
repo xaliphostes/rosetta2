@@ -34,6 +34,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../../bin)
 add_executable(rosetta_gen
     rosetta_gen.cpp # main() + help text
     manifest.cpp    # manifest.json -> Manifest (load + glob expansion)
+    doccomments.cpp # Doxygen / default-argument harvesting from the headers
     emit.cpp        # generator-project emission (bindings.h / driver / CMake)
     init.cpp        # --init (example manifest + heuristic source scan)
     build.cpp       # --build (the whole pipeline in one command)

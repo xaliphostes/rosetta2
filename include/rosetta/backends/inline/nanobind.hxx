@@ -216,7 +216,8 @@ mode is a wheel-only switch (`-DROSETTA_STABLE_ABI=ON` to force it by hand).)MD"
         // A sequence-adapted method as a chain segment (see px_seq_method — same
         // adapter, nanobind spelling). nanobind's stl/vector.h caster covers the
         // std::vector boundary.
-        inline std::string nbx_seq_method_segment(const GenClass &k, const GenMethod &m) {
+        inline std::string nbx_seq_method_segment(const GenClass &k, const GenMethod &m,
+                                                  const GenContext &c) {
             const PxSeqSig sig = px_seq_sig(m.params, m.param_cpp);
             std::string    decls, call;
             const std::string kq = qualified_of(k);
@@ -242,7 +243,8 @@ mode is a wheel-only switch (`-DROSETTA_STABLE_ABI=ON` to force it by hand).)MD"
             }
             const std::string def = m.is_static ? "def_static" : "def";
             return "." + def + "(\"" + m.name + "\", [](" + decls + ") {\n" + body +
-                   "        }" + nbx_doc_arg(m.doc) + ")";
+                   "        }" + px_keep_alive(m, c, "nb") + nbx_doc_arg(px_method_doc(m)) +
+                   px_arg_list(m.params, "nb", c) + ")";
         }
 
         // A sequence-typed field as def_prop_ro / def_prop_rw copying through
@@ -272,23 +274,32 @@ mode is a wheel-only switch (`-DROSETTA_STABLE_ABI=ON` to force it by hand).)MD"
         // first parameter is T& as an instance method.
         inline std::string nbx_method_segment(const GenClass &k, const GenMethod &m,
                                               const GenContext &c) {
-            const std::string dq = nbx_doc_arg(m.doc);
-            // Same rule, same reason as python (px_ref_return): a
-            // non-const lvalue-reference return of a bound class binds by
-            // reference, since nanobind's automatic policy would copy it.
+            const std::string dq = nbx_doc_arg(px_method_doc(m));
+            const std::string aq = px_arg_list(m.params, "nb", c);
+            // Same rules, same reasons as python. px_ref_return: a non-const
+            // lvalue-reference return of a bound class binds by reference,
+            // since nanobind's automatic policy would copy it.
+            // px_borrowed_pointer: a raw pointer to a bound class (or a
+            // container of them) binds by reference, since nanobind's automatic
+            // policy for a pointer is take_ownership and would DELETE an object
+            // the C++ side still owns.
             const std::string policy =
-                px_ref_return(m, c)
+                (px_borrowed_pointer(m.ret, c) || px_ref_return(m, c))
                     ? (m.is_static ? ", nb::rv_policy::reference"
                                    : ", nb::rv_policy::reference_internal")
                     : "";
+            // ... and the mirror case: a borrowed pointer handed IN, which the
+            // callee may store past the call. nb::keep_alive spelt the same way.
+            const std::string ka = px_keep_alive(m, c, "nb");
             if (m.is_extension) {
-                return ".def(\"" + m.name + "\", &" + m.ext_qualified + policy + dq + ")";
+                return ".def(\"" + m.name + "\", &" + m.ext_qualified + policy + ka + dq + aq +
+                       ")";
             }
             const std::string mp = px_member_pointer(k, m);
             if (m.is_static) {
-                return ".def_static(\"" + m.name + "\", " + mp + policy + dq + ")";
+                return ".def_static(\"" + m.name + "\", " + mp + policy + ka + dq + aq + ")";
             }
-            return ".def(\"" + m.name + "\", " + mp + policy + dq + ")";
+            return ".def(\"" + m.name + "\", " + mp + policy + ka + dq + aq + ")";
         }
 
         // The one base class nanobind can be told about, or "" when there is
@@ -407,7 +418,7 @@ mode is a wheel-only switch (`-DROSETTA_STABLE_ABI=ON` to force it by hand).)MD"
             for (const auto &m : k.methods) {
                 if (px_touches(m)) {
                     if (seq_adaptable(m) && px_seq_rest_ok(m, c)) {
-                        segs.push_back(nbx_seq_method_segment(k, m));
+                        segs.push_back(nbx_seq_method_segment(k, m, c));
                         coverage::note_bound("nanobind", k, m);
                     } else {
                         coverage::note_skip("nanobind", k, m, "sequence_not_adaptable",
@@ -474,7 +485,8 @@ mode is a wheel-only switch (`-DROSETTA_STABLE_ABI=ON` to force it by hand).)MD"
                             fb += "        return " + call + ";\n";
                         }
                         body += "    m.def(\"" + f.name + "\", [](" + sig.decls + ") {\n" + fb +
-                                "    }" + nbx_doc_arg(f.doc) + ");\n";
+                                "    }" + nbx_doc_arg(px_method_doc(f)) +
+                                px_arg_list(f.params, "nb", c) + ");\n";
                         coverage::note_bound_function("nanobind", f);
                     } else {
                         coverage::note_skip_function("nanobind", f, "sequence_not_adaptable",
@@ -489,7 +501,8 @@ mode is a wheel-only switch (`-DROSETTA_STABLE_ABI=ON` to force it by hand).)MD"
                                                  "signature");
                     continue;
                 }
-                body += "    m.def(\"" + f.name + "\", " + fn_addr(f) + nbx_doc_arg(f.doc) + ");\n";
+                body += "    m.def(\"" + f.name + "\", " + fn_addr(f) +
+                        nbx_doc_arg(px_method_doc(f)) + px_arg_list(f.params, "nb", c) + ");\n";
                 coverage::note_bound_function("nanobind", f);
             }
 

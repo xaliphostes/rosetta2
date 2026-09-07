@@ -1,0 +1,16 @@
+{
+  "//": "No 'doc_comments' field: harvesting is on by default. Set it to false to",
+  "//2": "generate from annotations alone, as every earlier version of rosetta did.",
+  "user_include": ".",
+  "rosetta_include": "../../include",
+  "generator_name": "polygon_gen",
+  "module_name": "polygon",
+  "targets": [ "markdown", "typescript", "openapi", "python" ],
+  "classes": [
+    { "name": "geom::Winding", "header": "polygon.h" },
+    { "name": "geom::Polygon", "header": "polygon.h" }
+  ],
+  "functions": [
+    { "name": "geom::centroid_distance", "header": "polygon.h" }
+  ]
+}

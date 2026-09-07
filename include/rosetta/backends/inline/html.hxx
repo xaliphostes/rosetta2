@@ -56,7 +56,17 @@ namespace rosetta {
                 if (i) {
                     s += ", ";
                 }
-                s += html_escape(ps[i].name) + ": " + html_type(ps[i].type);
+                // Same reading as the markdown renderer: `name?: type` when the
+                // parameter is optional but its default could not be recovered,
+                // `name: type = value` when it could.
+                s += html_escape(ps[i].name);
+                if (ps[i].has_default && ps[i].default_text.empty()) {
+                    s += "?";
+                }
+                s += ": " + html_type(ps[i].type);
+                if (!ps[i].default_text.empty()) {
+                    s += " = " + html_escape(ps[i].default_text);
+                }
             }
             return s;
         }
@@ -164,6 +174,26 @@ namespace rosetta {
                                "(" + html_params(m.params) + ") → " + html_type(m.ret) + "</code>\n";
                         if (!m.doc.empty()) {
                             out += "<p>" + html_escape(m.doc) + "</p>\n";
+                        }
+                        // Per-parameter documentation as a definition list —
+                        // the part a reader scans for.
+                        bool any_pdoc = false;
+                        for (const auto &p : m.params) {
+                            any_pdoc = any_pdoc || !p.doc.empty();
+                        }
+                        if (any_pdoc) {
+                            out += "<dl>\n";
+                            for (const auto &p : m.params) {
+                                if (p.doc.empty()) {
+                                    continue;
+                                }
+                                out += "<dt><code>" + html_escape(p.name) + "</code></dt><dd>" +
+                                       html_escape(p.doc) + "</dd>\n";
+                            }
+                            out += "</dl>\n";
+                        }
+                        if (!m.returns.empty()) {
+                            out += "<p><em>Returns:</em> " + html_escape(m.returns) + "</p>\n";
                         }
                     }
                 }

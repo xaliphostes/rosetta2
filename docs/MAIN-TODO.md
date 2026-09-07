@@ -6,7 +6,9 @@ Operators and conversions are structurally out. is_exportable_member_function ga
 
 The container vocabulary is thin. type_descriptor (include/rosetta/inline/generate.hxx:903-1049) understands: void, bool, string, arithmetic, std::function, std::vector, registered sequence/matrix traits, enum, raw T*, shared_ptr, class. Everything else falls through to kind = "unknown" → member skipped. That means no std::map, unordered_map, set, optional, variant, tuple, pair, array, span, string_view, unique_ptr, chrono. map and optional alone will silently delete a large fraction of methods on a typical modern C++ API.
 
-No parameter names, no default arguments. GenParam::name is synthesized argN (include/rosetta/generate.h:267), and nothing captures default args. So: no Python keyword arguments, no py::arg, and TypeScript/C#/Java signatures read f(arg0, arg1, arg2). For a tool whose output is meant to be a shipped SDK, that's a visible quality ceiling.
+~~No parameter names, no default arguments.~~ **Fixed.** `params_of` reads `identifier_of(param)` and `has_default_argument(param)`, so `GenParam::name` is the declared identifier (`argN` only where the declaration gives none) and `has_default` marks the optional ones. The default's *spelling* is not reflectable at all, so it is harvested from the header text and cross-checked against `has_default` before it is used. Python gets `py::arg("radius") = 32`, TypeScript gets `radius?: number`, C#/Java get real signatures, OpenAPI gets named parameters. See `tests/param_names.cpp`.
+
+Documentation, likewise, is no longer only what someone re-typed as a `rosetta::doc` annotation: `"doc_comments"` (on by default) reads the `///` and `/** @param … */` blocks the bound library already has and feeds every backend. See `docs/MANIFEST.md#doc-comments-doc_comments`.
 
 # 2. Semantics across the boundary
 

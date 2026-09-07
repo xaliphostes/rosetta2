@@ -181,6 +181,8 @@
 
 #pragma once
 
+#include "doccomments.h"
+
 #include <filesystem>
 #include <map>
 #include <string>
@@ -361,6 +363,17 @@ struct Manifest {
     // "ns::function", each a list of 0-based indices. Never inferred — see
     // GenParam::is_out for why the C++ cannot say.
     std::map<std::string, std::vector<std::size_t>> out_params;
+
+    // "doc_comments": harvest the Doxygen documentation and default arguments
+    // already present in the bound headers (default true — a library's own
+    // comments are the best docstrings a generated binding can have, and they
+    // cost nothing to read). Set false to generate from annotations alone.
+    bool doc_comments = true;
+
+    // The result of that harvest, keyed "Class::member" / "ns::fn" — see
+    // doccomments.h. Filled by load(); baked into the driver by emit.cpp and
+    // matched against the reflected signatures by rosetta::generate().
+    DocMap harvested_docs;
     std::vector<GeneratedHeaderEntry> generated_headers; // "generated_headers"
 
     // Optional foreign sequence containers ("sequences"): qualified template

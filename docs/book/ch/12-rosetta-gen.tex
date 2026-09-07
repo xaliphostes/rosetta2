@@ -66,7 +66,9 @@ multi-entry \field{user\_include}, \field{user\_sources},
 \field{compile\_definitions}, \field{build\_type} / \field{optimization}, a
 representative spread of targets, one class and one function. The idea is that
 you delete what you do not need rather than hunting the documentation for what
-exists.
+exists. \field{doc\_comments} is in there too, spelled at its default
+(\code{true}) so you can see the switch exists --- it is the one field you set
+in order to get \emph{less}.
 
 \subsection*{Pre-filled from a source scan}
 
@@ -116,7 +118,11 @@ bin/rosetta_gen --build manifest.json
 runs, in order:
 
 \begin{enumerate}
-  \item \textbf{emit} the generator project into \code{<manifest dir>/gen/};
+  \item \textbf{emit} the generator project into \code{<manifest dir>/gen/}.
+    This is also where the bound headers are read for their doc comments and
+    default arguments (chapter~\ref{ch:documentation}), so the driver carries
+    them as data --- no toolchain involved, and \field{doc\_comments}
+    \code{false} skips it;
   \item \textbf{build} it with CMake --- this step needs the clang-p2996
     toolchain, and reflection runs here --- and \textbf{run} the resulting
     generator, writing one self-contained project per target into

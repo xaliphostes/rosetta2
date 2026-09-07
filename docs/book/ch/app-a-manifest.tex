@@ -33,6 +33,11 @@ Every top-level field, alphabetically. \req\ marks a required field.
   Root of the C++26 / P2996 toolchain. Moves the other three together.
   \S\ref{sec:toolchain-paths} \\
 \addlinespace
+\field{doc\_comments} & & \code{true} &
+  Read the Doxygen documentation and default arguments already present in the
+  bound headers, and carry them into every backend. \code{false} generates from
+  annotations alone. Ch.~\ref{ch:documentation} \\
+\addlinespace
 \field{functions} & & \code{[]} &
   Free (non-member) functions to bind. \S\ref{sec:functions} \\
 \addlinespace

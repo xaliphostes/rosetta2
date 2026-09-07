@@ -38,7 +38,7 @@ that is right there.
 ```
 rosetta-book.tex     preamble + \input list. Everything shared lives here.
 ch/00-preface.tex    front matter
-ch/01..16            the chapters, in reading order
+ch/01..17            the chapters, in reading order
 ch/app-a..app-d      the reference appendices
 Makefile
 ```
@@ -77,9 +77,14 @@ manifest field, a target or an annotation changes, the places to update are:
 |---|---|
 | a manifest field | `docs/MANIFEST.md`, `ch/04`–`ch/09`, `ch/app-a-manifest.tex` |
 | an annotation kind | `docs/ANNOTATIONS.md`, `ch/10`, `ch/app-b-annotations.tex` |
+| what the doc harvester reads, or where a backend puts it | `docs/MANIFEST.md`, `ch/11`, `ch/app-c-targets.tex` (§ Documentation output) |
 | a target, or what one supports | `docs/MANIFEST.md`, `ch/06`, `ch/app-c-targets.tex` |
-| a `rosetta_gen` mode or flag | `docs/ROSETTA_GEN.md`, `ch/11` |
-| a coverage reason slug | `docs/COVERAGE.md`, `ch/12`, `ch/app-d-troubleshooting.tex` |
+| a `rosetta_gen` mode or flag | `docs/ROSETTA_GEN.md`, `ch/12` |
+| a coverage reason slug | `docs/COVERAGE.md`, `ch/13`, `ch/app-d-troubleshooting.tex` |
+
+Chapter numbers shift when one is inserted; the numbers above are the current
+ones. `ch/11-documentation.tex` was added after `ch/10`, moving the old
+`ch/11`–`ch/16` up by one.
 
 `make check` catches broken cross-references. Nothing catches a stale fact —
 that is what the table above is for.

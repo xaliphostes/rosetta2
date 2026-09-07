@@ -288,8 +288,40 @@ namespace rosetta {
     };
 
     struct GenParam {
-        std::string name; // synthesized "argN" (parameter names aren't reflected)
+        // The parameter's own identifier, read from the declaration by
+        // std::meta::identifier_of. Falls back to a synthesized "argN" for a
+        // parameter declared without a name (`void f(double, int n)`) and for
+        // the overload-selection path, which decomposes a function TYPE and so
+        // has no declaration to read names from (see params_from_types).
+        //
+        // This is METADATA, not a C++ identifier: every backend that emits code
+        // spells its own positional locals ("arg0", "arg1"), so a name that
+        // happens to collide with a generated local, or with a keyword of the
+        // target language, cannot break the emitted C++. Backends that render
+        // the name into a HOST-language signature (TypeScript, C#, Java) run it
+        // through that language's keyword guard first — see ts_param_name and
+        // friends.
+        std::string name;
         GenType     type;
+
+        // Per-parameter documentation, harvested from the declaration's Doxygen
+        // `@param <name> ...` block by rosetta_gen and applied after the walk
+        // (GenerateOptions::doc_comments). Empty when the source carries none.
+        std::string doc;
+
+        // True when the C++ declaration gives this parameter a default argument
+        // (std::meta::has_default_argument). Reflection reports the FACT but not
+        // the expression, so a backend that only needs optionality — a
+        // TypeScript `x?: number`, an OpenAPI `required: false` — is served by
+        // this alone.
+        bool has_default = false;
+
+        // The default argument's source spelling ("32", "true", "Mode::Fast"),
+        // harvested textually by rosetta_gen because reflection cannot yield it.
+        // Empty when unavailable — the harvester is deliberately conservative and
+        // refuses anything it cannot re-emit verbatim into the generated C++
+        // (see doccomments.cpp). Only ever set when has_default is also true.
+        std::string default_text;
 
         // True when the parameter is declared as an lvalue reference (T& /
         // const T&). A by-reference class parameter never copies — every
@@ -326,6 +358,13 @@ namespace rosetta {
         GenType                ret;
         std::vector<GenParam>  params;
         std::string            doc; // rosetta::doc annotation text, if any
+
+        // The `@return` / `@returns` text of the declaration's Doxygen block,
+        // harvested by rosetta_gen (GenerateOptions::doc_comments). Kept apart
+        // from `doc` because the targets that can place it — a `:returns:` line
+        // in a Python docstring, a `@returns` tag in TSDoc, the response
+        // `description` of an OpenAPI operation — each want it on its own.
+        std::string            returns;
 
         // Virtual / trampoline metadata, captured from the rosetta::virtual_spec
         // that walk<T>() synthesizes plus direct reflection queries. Used by
@@ -407,7 +446,8 @@ namespace rosetta {
         std::string           header;    // basename for #include
         GenType               ret;
         std::vector<GenParam> params;
-        std::string           doc; // from the manifest, if any
+        std::string           doc;     // from the manifest, or harvested from the header
+        std::string           returns; // harvested `@return` text — see GenMethod::returns
 
         // Non-empty when the manifest picked ONE overload of an overloaded free
         // function by spelling its signature ("signature": "void(Mesh&, bool)").
@@ -477,6 +517,14 @@ namespace rosetta {
         // — consults these, filtering to the bases that are themselves bound.
         std::vector<std::string> bases;
         std::string doc;    // class_markdown(*this) — per-class Markdown fragment (README body)
+
+        // The class's OWN documentation — the comment written above it in the
+        // header, harvested by rosetta_gen. Distinct from `doc`, which is a
+        // rendered Markdown fragment listing the members: this is the one or two
+        // sentences that belong in a `py::class_<T>(m, "T", <here>)`, at the top
+        // of a TypeScript class, or as an OpenAPI schema description. Empty
+        // unless the source carried a doc comment for the type.
+        std::string brief;
         std::string annotations_json; // raw out-of-line annotation side-car (ann_json_source<T>), if any
 
         // Every class-level annotation, type-erased (see GenField::annotations).
@@ -590,6 +638,33 @@ namespace rosetta {
         std::string content; // the finished text, substitutions already applied
     };
 
+    /**
+     * @brief One parameter of a harvested declaration: the name as the header
+     * spells it, its `@param` text, and the default argument's source spelling.
+     * `name` is what the match against the reflected signature keys on — the
+     * cross-check that keeps a mis-parsed declaration from writing another
+     * method's documentation into this one.
+     */
+    struct DocParam {
+        std::string name;
+        std::string doc;
+        std::string default_text; // "" when absent or not safely re-emittable
+    };
+
+    /**
+     * @brief One declaration's documentation, as rosetta_gen read it out of the
+     * header: the Doxygen comment attached to it, plus what the declaration
+     * itself says about its parameters. Purely descriptive — nothing here can
+     * add, remove or rename a binding; it only fills text that reflection does
+     * not carry (comments) and text it cannot carry (default arguments).
+     */
+    struct DocEntry {
+        std::string           doc;     // brief + detail, already rendered
+        std::string           returns; // `@return` / `@returns` text
+        std::vector<DocParam> params;  // in declaration order
+        bool                  is_function = false; // false for a field
+    };
+
     struct GenerateOptions {
         std::filesystem::path    out_dir;         // root of the generated tree
         std::vector<std::filesystem::path> user_include; // dir(s) containing the class headers
@@ -604,6 +679,20 @@ namespace rosetta {
         // walk, since it is knowledge the C++ does not carry — see
         // GenParam::is_out.
         std::map<std::string, std::vector<std::size_t>> out_params;
+
+        // Doc comments harvested from the user's headers by rosetta_gen (see
+        // DocEntry). Keyed exactly like out_params — "Class::member" for a
+        // field or method, "ns::fn" for a free function, and the bare class
+        // spelling for the class's own comment. The value is a LIST because a
+        // name can be overloaded; the entry is matched to an IR method by
+        // arity and parameter names, and a group that cannot be told apart
+        // contributes only what all its members agree on (see apply_doc_comments).
+        //
+        // This travels as generator options rather than through the annotation
+        // side-car because it is per-PARAMETER data — a name, a doc string and a
+        // default-argument spelling per index — which the annotation schema
+        // (one value per member) has no way to express.
+        std::map<std::string, std::vector<DocEntry>> doc_comments;
 
         // Manifest "module_init" — see GenContext::init_headers /
         // init_statements, which these fill verbatim.

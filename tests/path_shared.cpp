@@ -235,6 +235,8 @@ TEST(PathShared, TypescriptDeclaresPointeeAndString) {
     fs::remove_all(dir);
 
     ASSERT_FALSE(s.empty());
-    EXPECT_TRUE(has(s, "load_file(arg0: string): Doc;")); // not "shared_ptr", not "any"
-    EXPECT_TRUE(has(s, "where(arg0: string): string;"));
+    // The parameter is named `p` in the header, and the walk reads that name —
+    // the ".d.ts" is what an editor shows on completion, so it says `p`.
+    EXPECT_TRUE(has(s, "load_file(p: string): Doc;")); // not "shared_ptr", not "any"
+    EXPECT_TRUE(has(s, "where(p: string): string;"));
 }

@@ -109,21 +109,29 @@ Ordinary CMake, or npm, or emcmake, over an ordinary C++ project.
 
 \code{import}, \code{require}, \code{dlopen}. Nothing rosetta-specific is left.
 
-\section{Your library is read twice, for different reasons}
+\section{Your library is read three times, for different reasons}
 
 \begin{center}
 \begin{tabular}{@{}llll@{}}
 \toprule
 \textbf{Pass} & \textbf{By} & \textbf{To} & \textbf{Needs C++26} \\
 \midrule
+step 0 & \code{rosetta\_gen}       & \textbf{read} your comments  & \no \\
 step 1 & the reflection driver  & \textbf{describe} your types & \yes \\
 step 3 & the generated binding  & \textbf{call} them           & \no \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-This table is the single most useful thing to hold in your head, and it has one
-consequence worth stating on its own:
+The middle row is the single most useful thing to hold in your head. The first
+is the odd one out and worth a sentence: comments are not reflectable --- P2996
+describes declarations, not the text around them --- so the documentation your
+headers already carry is read \emph{lexically}, by the tool, while it is
+emitting the driver. That pass compiles nothing and needs no toolchain; what it
+finds is matched against what step~1 reflects, and dropped where the two
+disagree. Chapter~\ref{ch:documentation} is about that pass.
+
+The table has one further consequence worth stating on its own:
 
 \begin{warn}
 Annotations written \textbf{inline} --- \code{[[= rosetta::doc\{\ldots\} ]]} ---

@@ -280,19 +280,73 @@ of those. Members using any other type are omitted from both sides.
         }
 
         // "double arg0, double arg1"
+        // A parameter name safe to DECLARE in Java. The IR carries the
+        // identifier the C++ declaration used, and `final`, `class`, `native`
+        // and `synchronized` are all legal C++ parameter names and all keywords
+        // here. Such a name reverts to the positional form. The declaration and
+        // the forwarding call both go through this, so they cannot disagree.
+        inline std::string java_ident(const std::string &name, std::size_t index) {
+            static const char *kw[] = {
+                "abstract","assert","boolean","break","byte","case","catch","char","class","const",
+                "continue","default","do","double","else","enum","extends","false","final",
+                "finally","float","for","goto","if","implements","import","instanceof","int",
+                "interface","long","native","new","null","package","private","protected","public",
+                "return","short","static","strictfp","super","switch","synchronized","this",
+                "throw","throws","transient","true","try","var","void","volatile","while","yield",
+            };
+            for (const char *k : kw) {
+                if (name == k) {
+                    return "arg" + std::to_string(index);
+                }
+            }
+            return name.empty() ? "arg" + std::to_string(index) : name;
+        }
+
+        // A Javadoc block. Rendered over several lines, and with any `*/` in the
+        // text neutralized: a harvested comment that contains one would close
+        // the block early and leave the rest of it as code.
+        inline std::string java_doc(const std::string &doc, const std::string &indent) {
+            if (doc.empty()) {
+                return {};
+            }
+            std::string safe = doc;
+            for (std::size_t i = safe.find("*/"); i != std::string::npos;
+                 i             = safe.find("*/", i)) {
+                safe.replace(i, 2, "*&#47;");
+            }
+            // A blank line is written as " *", not " * " — the paragraph break
+            // has to survive, trailing whitespace does not.
+            const auto doc_line = [&indent](std::string &o, const std::string &l) {
+                o += indent + (l.empty() ? " *" : " * " + l) + "\n";
+            };
+            std::string out = indent + "/**\n";
+            std::string line;
+            for (char ch : safe) {
+                if (ch == '\n') {
+                    doc_line(out, line);
+                    line.clear();
+                    continue;
+                }
+                line += ch;
+            }
+            doc_line(out, line);
+            // No trailing newline: see cs_doc — the call sites own the spacing.
+            return out + indent + " */";
+        }
+
         inline std::string java_param_sig(const std::vector<GenParam> &ps, const GenContext &c) {
             std::string s;
             for (std::size_t i = 0; i < ps.size(); ++i) {
-                s += (i ? ", " : "") + java_sig(ps[i].type, c) + " " + ps[i].name;
+                s += (i ? ", " : "") + java_sig(ps[i].type, c) + " " + java_ident(ps[i].name, i);
             }
             return s;
         }
 
-        // "arg0, arg1" — the varargs forwarded to the Rt helpers.
+        // The varargs forwarded to the Rt helpers, matching java_param_sig.
         inline std::string java_arg_names(const std::vector<GenParam> &ps) {
             std::string s;
             for (std::size_t i = 0; i < ps.size(); ++i) {
-                s += (i ? ", " : "") + ps[i].name;
+                s += (i ? ", " : "") + java_ident(ps[i].name, i);
             }
             return s;
         }
@@ -607,7 +661,7 @@ final class Rt {
                 const std::string ty  = java_sig(f.type, c);
                 const std::string cap = java_cap(f.name);
                 if (!f.doc.empty()) {
-                    s += "\n    /** " + f.doc + " */";
+                    s += "\n" + java_doc(f.doc, "    ");
                 }
                 s += "\n    public " + ty + " get" + cap + "() {\n";
                 s += "        return Rt.getField(_t, _id, \"" + f.name + "\", " +
@@ -629,7 +683,7 @@ final class Rt {
                 const std::string names = java_arg_names(m.params);
                 const std::string tail  = names.empty() ? "" : ", " + names;
                 if (!m.doc.empty()) {
-                    s += "\n    /** " + m.doc + " */";
+                    s += "\n" + java_doc(m.doc, "    ");
                 }
                 s += "\n    public " + std::string(m.is_static ? "static " : "");
                 if (m.ret.kind == "void") {
@@ -714,7 +768,7 @@ final class Rt {
                 const std::string names = java_arg_names(f.params);
                 const std::string tail  = names.empty() ? "" : ", " + names;
                 if (!f.doc.empty()) {
-                    s += "\n    /** " + f.doc + " */";
+                    s += "\n" + java_doc(f.doc, "    ");
                 }
                 s += "\n    public static ";
                 if (f.ret.kind == "void") {

@@ -193,6 +193,9 @@ TEST(OutParams, TypescriptDeclaresTheTuple) {
     fs::remove_all(dir);
 
     ASSERT_FALSE(s.empty());
-    EXPECT_TRUE(has(s, "get_doubles(arg0: string): [boolean, number[], number];"));
+    // `name` is the declared parameter; `out` and `dim` are out-parameters and
+    // leave the signature, so the reflected names of the two that remain are
+    // exactly what the declaration spells.
+    EXPECT_TRUE(has(s, "get_doubles(name: string): [boolean, number[], number];"));
     EXPECT_TRUE(has(s, "measure(): [number];"));
 }

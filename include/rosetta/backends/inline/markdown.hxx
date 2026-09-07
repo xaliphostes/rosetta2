@@ -59,12 +59,28 @@ namespace rosetta {
                 for (const auto &f : c.functions) {
                     fdoc += "### `" + f.name + "(";
                     for (std::size_t i = 0; i < f.params.size(); ++i) {
-                        fdoc += (i ? ", " : "") + f.params[i].name + ": " +
-                                readable_type(f.params[i].type);
+                        fdoc += (i ? ", " : "") + readable_param(f.params[i]);
                     }
                     fdoc += ") → " + readable_type(f.ret) + "`\n\n";
                     if (!f.doc.empty()) {
                         fdoc += f.doc + "\n\n";
+                    }
+                    // Same shape as a method's entry (see class_markdown): one
+                    // line per documented argument, then the return.
+                    bool any_pdoc = false;
+                    for (const auto &p : f.params) {
+                        any_pdoc = any_pdoc || !p.doc.empty();
+                    }
+                    if (any_pdoc) {
+                        for (const auto &p : f.params) {
+                            if (!p.doc.empty()) {
+                                fdoc += "- `" + p.name + "` — " + p.doc + "\n";
+                            }
+                        }
+                        fdoc += "\n";
+                    }
+                    if (!f.returns.empty()) {
+                        fdoc += "*Returns:* " + f.returns + "\n\n";
                     }
                 }
                 section(fdoc);

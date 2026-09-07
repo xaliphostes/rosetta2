@@ -61,6 +61,8 @@ Everything below is discovered by **reflection** from your unmodified headers �
 - **Enums** — `enum` / `enum class`, with enumerators surfaced as named constants.
 - **Free (non-member) functions** — declared in the [manifest](./docs/MANIFEST.md), no edit to your headers ([details](docs/FREE_FUNCTIONS.md)).
 - **Nested user types & `std::vector`** — `Surface` returning `Point`/`Triangle`, vector members, etc. are marshalled across the language boundary.
+- **Parameter names & default arguments** — read from the declaration, so a binding offers `mesh.remesh(edge_length=0.5)` rather than `remesh(arg0)`, and a C++ default reaches the host language as one ([details](docs/MANIFEST.md#doc-comments-doc_comments)).
+- **The documentation your library already has** — `///` and `/** @param … @return … */` blocks are read out of the headers and become Python docstrings, TSDoc, Javadoc, C# XML docs and OpenAPI descriptions. Nothing to write, nothing to annotate; turn it off with `"doc_comments": false`.
 - Members a backend can't marshal (e.g. `std::function` params) are **skipped**, not fatal.
 
 **Opt-in annotations** (enrich without intruding — see the [annotation reference](docs/ANNOTATIONS.md))
@@ -356,12 +358,13 @@ Embind is the friendliest here because it accepts any number of `EMSCRIPTEN_BIND
 ## Examples
 
 <details>
-<summary><b>18 worked examples</b> — manifest-driven, expanded targets, the dynamic object model, trampolines, mini-moc, the three UI inspectors, hand-written references <i>(expand)</i></summary>
+<summary><b>19 worked examples</b> — manifest-driven, expanded targets, the dynamic object model, trampolines, mini-moc, the three UI inspectors, hand-written references <i>(expand)</i></summary>
 
 | Path                       | What it shows                                       |
 |----------------------------|-----------------------------------------------------|
 | `examples/manifest`        | Manifest-driven generation for `Person` (no class modification) |
 | `examples/annotate-manifest`| Out-of-line annotations from an external JSON file, wired by the manifest's `annotations` field ([details](docs/OUT_OF_LINE_ANNOTATIONS.md)) |
+| `examples/doxygen`         | The documentation a library already has: plain Doxygen comments and default arguments in an untouched header become Python docstrings + keyword arguments, TSDoc, OpenAPI descriptions and a Markdown reference ([details](docs/MANIFEST.md#doc-comments-doc_comments)) |
 | `examples/geom-lib`        | Manifest-driven bindings for a small geometry library (nested types, vectors) |
 | `examples/geom-expanded`   | Reflection-free `python` / `nanobind` / `node` / `wasm` / `qt` / `qml` / `csharp` / `java` / `lua` / `julia` bindings (off-the-shelf compiler, emsdk and Qt, any Lua 5.1–5.4, CxxWrap.jl) with out-of-line annotations |
 | `examples/dynamic`         | The `dynamic` backend end to end: one set of generated metadata driving a terminal interpreter *and* a Qt viewer (3D view + property panel + console), neither naming a bound type |

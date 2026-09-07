@@ -303,7 +303,11 @@ namespace rosetta::dyn {
 
     /** @brief A parameter of a method, constructor or free function. */
     struct MetaParam {
-        const char     *name = ""; // "argN" until parameter names are reflected
+        // The parameter's own identifier, read from the declaration by the
+        // walk. Falls back to "argN" for a parameter declared without a name,
+        // and for the manifest's overload-selection path, which decomposes a
+        // function type and so has no declaration to read names from.
+        const char     *name = "";
         const TypeDesc *type = nullptr;
         bool            is_ref         = false;
         bool            is_mutable_ref = false;
